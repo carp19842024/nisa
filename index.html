@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#181c46" />
+    <meta name="description" content="NISAの積立投資をテーマにした、暴落に耐えるミニゲーム（架空のシミュレーションです）" />
+    <title>しがみつけ！ 暴落チキンレース</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="stage-wrap">
+        <div id="stage">
+          <canvas id="game" width="360" height="640"></canvas>
+
+          <!-- 本編の HUD -->
+          <div id="hud" class="layer hidden">
+            <div class="hud-top">
+              <span id="hud-date">1年目 1月</span>
+              <span id="hud-state" class="state-chip">保有中</span>
+              <button id="pause-btn" class="icon-btn" aria-label="一時停止">II</button>
+            </div>
+            <div class="hud-grid">
+              <div><small>評価額</small><b id="hud-value">0</b></div>
+              <div><small>元本</small><b id="hud-principal">0</b></div>
+              <div><small>損益</small><b id="hud-profit">0</b></div>
+              <div><small>生活防衛資金</small><b id="hud-emergency">0</b></div>
+            </div>
+            <div class="grip-row">
+              <small>握力</small>
+              <div class="grip-bar"><div id="grip-fill"></div></div>
+              <small id="hud-dd" class="dd"></small>
+            </div>
+          </div>
+
+          <div id="comments" class="layer"></div>
+          <div id="labels" class="layer">
+            <div id="peak-label" class="peak-label hidden">前の高値</div>
+            <div id="tap-prompt" class="tap-prompt hidden">連打で しがみつけ！</div>
+          </div>
+          <div id="banner" class="banner hidden"></div>
+
+          <!-- 操作ボタン -->
+          <div id="controls" class="hidden">
+            <button id="sell-btn" class="hold-btn" type="button">
+              <span class="hold-fill"></span>
+              <span class="hold-label">長押しで <b>売る</b></span>
+            </button>
+            <button id="buy-btn" class="buy-btn hidden" type="button">現金で <b>買い戻す</b></button>
+            <p class="key-hint">PC：スペース＝しがみつく／S長押し＝売る／B＝買い戻す</p>
+          </div>
+
+          <!-- 画面（HTML） -->
+          <section id="screen-title" class="screen hidden"></section>
+          <section id="screen-disclaimer" class="screen hidden"></section>
+          <section id="screen-setup" class="screen hidden"></section>
+          <section id="screen-result" class="screen hidden"></section>
+
+          <div id="modal" class="modal hidden"></div>
+          <div id="pause-overlay" class="modal hidden">
+            <div class="modal-card">
+              <h2>一時停止中</h2>
+              <p>相場は待ってくれる…ゲームの中だけは。</p>
+              <button id="resume-btn" class="btn primary" type="button">再開する</button>
+              <button id="quit-btn" class="btn ghost" type="button">タイトルへ戻る</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
