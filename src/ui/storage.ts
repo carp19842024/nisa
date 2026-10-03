@@ -12,6 +12,8 @@ export interface SaveData {
   };
   /** 注意事項を一度読んだら、以降はスキップできる */
   seenDisclaimer?: boolean;
+  /** BGM を OFF にしている */
+  bgmOff?: boolean;
 }
 
 export function load(): SaveData {
@@ -43,4 +45,8 @@ export function submitScore(score: NonNullable<SaveData['highScore']>): boolean 
 
 export function markDisclaimerSeen(): void {
   save({ ...load(), seenDisclaimer: true });
+}
+
+export function setBgmOff(off: boolean): void {
+  save({ ...load(), bgmOff: off });
 }

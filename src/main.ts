@@ -3,6 +3,7 @@
 import '@fontsource/dotgothic16/400.css';
 import './styles.css';
 import { CONFIG } from './config';
+import { Bgm } from './game/audio';
 import { Game } from './game/loop';
 import { Renderer, VIEW_H, VIEW_W } from './game/renderer';
 import { loadSprites, placeholderSprites, type SpriteSet } from './game/sprites';
@@ -16,7 +17,7 @@ import { setupHoldButton } from './ui/hold';
 import { Hud } from './ui/hud';
 import { renderResult } from './ui/result';
 import { renderSetup } from './ui/setup';
-import { load, markDisclaimerSeen, submitScore } from './ui/storage';
+import { load, markDisclaimerSeen, setBgmOff, submitScore } from './ui/storage';
 import { renderTitle } from './ui/title';
 
 type Screen = 'title' | 'disclaimer' | 'setup' | 'game' | 'result';
@@ -45,6 +46,21 @@ let allocation: Allocation = {
   invest: { ...CONFIG.money.defaultInvest },
   savePerMonth: CONFIG.money.monthlyBudget - totalInvest({ invest: CONFIG.money.defaultInvest, savePerMonth: 0 }),
 };
+const bgm = new Bgm(load().bgmOff !== true);
+
+function toggleBgm(): void {
+  bgm.setEnabled(!bgm.enabled);
+  setBgmOff(!bgm.enabled);
+  updateBgmButtons();
+}
+
+function updateBgmButtons(): void {
+  const hudBtn = $('bgm-btn');
+  hudBtn.classList.toggle('off', !bgm.enabled);
+  hudBtn.setAttribute('aria-pressed', String(bgm.enabled));
+  $('pause-bgm-btn').textContent = `BGM：${bgm.enabled ? 'ON' : 'OFF'}`;
+}
+
 /** 「設定を変えてもう一度」のときは同じ相場（シード）で遊ぶ */
 let setupSeed: number | null = null;
 let lastResult: GameResult | null = null;
@@ -79,7 +95,11 @@ function go(next: Screen): void {
   for (const [name, el] of Object.entries(screens)) show(el, name === next);
   hud.showGameUi(next === 'game');
   show(pauseOverlay, false);
-  if (next !== 'game') renderer.resetCamera();
+  if (next !== 'game') {
+    renderer.resetCamera();
+    // BGM はプレイ中だけ
+    bgm.stop();
+  }
 
   if (next === 'title') {
     renderTitle(screens.title, {
@@ -88,6 +108,8 @@ function go(next: Screen): void {
         if (load().seenDisclaimer) go('setup');
         else go('disclaimer');
       },
+      bgmOn: () => bgm.enabled,
+      onToggleBgm: toggleBgm,
       onDisclaimer: () => {
         renderDisclaimer(screens.disclaimer, {
           firstTime: false,
@@ -137,6 +159,7 @@ function startGame(seed: number): void {
     },
     onEnd: (actions) => {
       const g = game!;
+      bgm.stop();
       resetHolds();
       hud.banner('20年が経った…', 'normal', 1.5);
       setTimeout(() => {
@@ -170,6 +193,8 @@ function startGame(seed: number): void {
     },
   );
   game.start();
+  // 「はじめる」「もう一度」のクリックの中で呼ばれるので、自動再生の制限にかからない
+  bgm.start();
 }
 
 async function share(res: GameResult): Promise<void> {
@@ -230,7 +255,10 @@ function isRunning(): boolean {
 function setPaused(p: boolean): void {
   if (!game || screen !== 'game' || game.finished) return;
   game.userPaused = p;
-  if (p) resetHolds();
+  if (p) {
+    resetHolds();
+    bgm.pause();
+  } else bgm.resume();
   show(pauseOverlay, p);
 }
 
@@ -258,6 +286,8 @@ window.addEventListener('keydown', (e) => {
     if (!e.repeat && isRunning()) hud.chip(DIGIT_KEYS.indexOf(e.code))?.press();
   } else if (e.code === 'KeyB') {
     if (isRunning()) game.buyBack();
+  } else if (e.code === 'KeyM') {
+    if (!e.repeat) toggleBgm();
   } else if (e.code === 'Escape' || e.code === 'KeyP') {
     if (!hud.modalOpen) setPaused(!game.userPaused);
   }
@@ -268,6 +298,10 @@ window.addEventListener('keyup', (e) => {
 });
 
 $('pause-btn').addEventListener('click', () => setPaused(true));
+$('bgm-btn').addEventListener('click', toggleBgm);
+$('bgm-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
+$('pause-bgm-btn').addEventListener('click', toggleBgm);
+updateBgmButtons();
 $('pause-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
 $('resume-btn').addEventListener('click', () => setPaused(false));
 $('quit-btn').addEventListener('click', () => {
@@ -278,6 +312,9 @@ $('quit-btn').addEventListener('click', () => {
 // タブを離れたら一時停止
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && isRunning()) setPaused(true);
+  // イベントのモーダル表示中などでも、裏で鳴りっぱなしにしない
+  if (document.hidden) bgm.pause();
+  else if (screen === 'game' && game && !game.userPaused && !game.finished) bgm.resume();
 });
 
 // ダブルタップ拡大・ピンチ・長押しメニューの抑止
@@ -340,5 +377,5 @@ loadSprites().then((s) => {
 
 // デバッグ用（コンソールから結果を確認できるように）
 Object.assign(window as unknown as Record<string, unknown>, {
-  __shigamitsuke: { get game() { return game; }, get result() { return lastResult; } },
+  __shigamitsuke: { get game() { return game; }, get result() { return lastResult; }, bgm },
 });

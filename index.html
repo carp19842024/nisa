@@ -21,6 +21,7 @@
             <div class="hud-top">
               <span id="hud-date">1年目 1月</span>
               <span id="hud-state" class="state-chip">NISA積立中</span>
+              <button id="bgm-btn" class="icon-btn bgm-btn" type="button" aria-label="BGM の ON/OFF" aria-pressed="true">♪</button>
               <button id="pause-btn" class="icon-btn" aria-label="一時停止">II</button>
             </div>
             <div class="hud-grid">
@@ -49,7 +50,7 @@
           <!-- 操作ボタン -->
           <div id="controls" class="hidden">
             <div id="fund-chips" class="fund-chips"></div>
-            <p class="key-hint">PC：スペース＝しがみつく／1〜4長押し＝そのファンドを売る（停止中は押すと再開）／S長押し＝全部売る／B＝全部再開</p>
+            <p class="key-hint">PC：スペース＝しがみつく／1〜4長押し＝そのファンドを売る（停止中は押すと再開）／S長押し＝全部売る／B＝全部再開／M＝BGM</p>
           </div>
 
           <!-- 画面（HTML） -->
@@ -63,6 +64,7 @@
             <div class="modal-card">
               <h2>一時停止中</h2>
               <p>相場は待ってくれる…ゲームの中だけは。</p>
+              <button id="pause-bgm-btn" class="btn ghost" type="button"></button>
               <button id="resume-btn" class="btn primary" type="button">再開する</button>
               <button id="quit-btn" class="btn ghost" type="button">タイトルへ戻る</button>
             </div>

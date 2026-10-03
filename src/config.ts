@@ -318,6 +318,12 @@ export const CONFIG = {
     heavyShare: 0.5,
   },
 
+  audio: {
+    /** プレイ中の BGM（public/ からの相対パス） */
+    bgmFile: 'audio/bgm.mp3',
+    bgmVolume: 0.45,
+  },
+
   storageKey: 'shigamitsuke.v1',
 };
 

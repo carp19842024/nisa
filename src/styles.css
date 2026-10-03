@@ -915,3 +915,21 @@ button {
     border-color: var(--yellow);
   }
 }
+
+.title-sub-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.title-sub-btns .btn {
+  flex: 1;
+}
+
+.bgm-btn {
+  font-size: 13px;
+}
+
+.bgm-btn.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
