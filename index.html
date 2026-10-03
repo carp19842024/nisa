@@ -24,10 +24,13 @@
               <button id="pause-btn" class="icon-btn" aria-label="一時停止">II</button>
             </div>
             <div class="hud-grid">
-              <div><small>評価額</small><b id="hud-value">0</b></div>
+              <div><small id="hud-value-label">評価額</small><b id="hud-value">0</b></div>
               <div><small>元本</small><b id="hud-principal">0</b></div>
               <div><small>損益</small><b id="hud-profit">0</b></div>
               <div><small>生活防衛資金</small><b id="hud-emergency">0</b></div>
+            </div>
+            <div id="hud-hold" class="hud-hold hidden">
+              <small>ずっと持っていたら</small><b id="hud-hold-value">0</b><b id="hud-hold-diff" class="minus">0</b>
             </div>
             <div class="grip-row">
               <small>握力</small>

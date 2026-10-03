@@ -7,7 +7,7 @@ import type { Overlay } from '../game/renderer';
 import type { SpriteSet } from '../game/sprites';
 import type { LifeEventOutcome } from '../sim/portfolio';
 import { $, show, spriteCanvas } from './dom';
-import { escapeHtml, man, monthLabel, pctSigned, signClass } from './format';
+import { escapeHtml, man, manSigned, monthLabel, pctSigned, signClass } from './format';
 
 export class Hud {
   private readonly els = {
@@ -15,6 +15,10 @@ export class Hud {
     date: $('hud-date'),
     state: $('hud-state'),
     value: $('hud-value'),
+    valueLabel: $('hud-value-label'),
+    hold: $('hud-hold'),
+    holdValue: $('hud-hold-value'),
+    holdDiff: $('hud-hold-diff'),
     principal: $('hud-principal'),
     profit: $('hud-profit'),
     emergency: $('hud-emergency'),
@@ -69,6 +73,14 @@ export class Hud {
     this.set('date', e.date, monthLabel(Math.min(game.currentMonth, CONFIG.months - 1)));
     this.set('state', e.state, game.invested ? '保有中' : '売却中（現金）', game.invested ? 'state-chip' : 'state-chip sold');
     this.set('value', e.value, man(value));
+    // 売却中はファンドを持っていない。増えるのは毎月の積立分の現金だけ
+    this.set('valueLabel', e.valueLabel, game.invested ? '評価額' : '現金（ファンド0円）');
+    show(e.hold, !game.invested);
+    if (!game.invested) {
+      const hold = game.holdValue;
+      this.set('holdValue', e.holdValue, man(hold));
+      this.set('holdDiff', e.holdDiff, `差 ${manSigned(value - hold)}`, signClass(value - hold));
+    }
     this.set('principal', e.principal, man(pf.contributed));
     this.set('profit', e.profit, pctSigned(rate), signClass(profit));
     this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
@@ -185,8 +197,8 @@ export class Hud {
 
   /** 売却・買い戻しの通知 */
   trade(type: 'sell' | 'letGo' | 'buy', amount: number): void {
-    if (type === 'sell') this.banner(`全部売った（${man(amount)}）`, 'bad');
-    else if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却（${man(amount)}）`, 'bad', 2.6);
+    if (type === 'sell') this.banner(`全部売った（${man(amount)}）。これからの積立は現金で貯まる`, 'bad', 2.6);
+    else if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却（${man(amount)}）。これからの積立は現金で貯まる`, 'bad', 3);
     else this.banner(`買い戻した（${man(amount)}）`, 'good');
   }
 }

@@ -29,6 +29,8 @@ export class Game {
   readonly market: Market;
   readonly events: LifeEvent[];
   readonly portfolio: Portfolio;
+  /** 同じ値動き・同じイベントで一度も売らなかった場合（売却中の比較表示用） */
+  readonly holdPortfolio: Portfolio;
   readonly grip: Grip;
   readonly actions: PlayerAction[] = [];
 
@@ -70,6 +72,7 @@ export class Game {
     this.market = generateMarket(seed, cfg);
     this.events = scheduleLifeEvents(this.market, cfg);
     this.portfolio = new Portfolio(this.market, allocation, this.events, cfg);
+    this.holdPortfolio = new Portfolio(this.market, allocation, this.events, cfg);
     this.grip = new Grip(cfg);
     this.price = this.market.prices[0];
     this.peak = this.price;
@@ -143,6 +146,7 @@ export class Game {
   /** 月初処理。イベントで止まったら true */
   private processMonth(m: number): boolean {
     const outcome = this.portfolio.startMonth(m);
+    this.holdPortfolio.startMonth(m);
     this.nextMonth = m + 1;
     const sc = this.market.scenarios.find((s) => s.startMonth === m);
     if (sc) this.cb.onScenarioStart(sc);
@@ -237,8 +241,17 @@ export class Game {
     this.paused = false;
   }
 
+  private get valuationPrice(): number {
+    return this.market.prices[this.finished ? this.cfg.months : this.currentMonth];
+  }
+
   /** HUD 用の評価額（売買と同じく、今の月の基準価額で評価する） */
   get value(): number {
-    return this.portfolio.value(this.market.prices[this.finished ? this.cfg.months : this.currentMonth]);
+    return this.portfolio.value(this.valuationPrice);
+  }
+
+  /** ずっと持ち続けていたらの評価額 */
+  get holdValue(): number {
+    return this.holdPortfolio.value(this.valuationPrice);
   }
 }
