@@ -49,10 +49,19 @@ describe('称号', () => {
     for (const m of [10, 30, 50]) acts.push({ month: m, type: 'sell' }, { month: m + 5, type: 'buy' });
     expect(title(acts)).toBe('timingWizard');
   });
-  it('途中下車（売って最後まで買い直さない。1本だけでも）', () => {
+  it('途中下車（自分で売って、最後まで1本も積立していない）', () => {
     expect(title([{ month: 50, type: 'sell' }])).toBe('getOff');
     const a: Allocation = { invest: { zenbu: 30_000, gold: 10_000 }, savePerMonth: 10_000 };
-    expect(title([{ month: 50, type: 'sell', fund: 'gold' }], [], a)).toBe('getOff');
+    expect(title([{ month: 50, type: 'sell', fund: 'gold' }, { month: 60, type: 'sell', fund: 'zenbu' }], [], a)).toBe('getOff');
+  });
+  it('1本だけ売ったまま（他は積立中）なら途中下車ではない', () => {
+    const a: Allocation = { invest: { zenbu: 30_000, gold: 10_000 }, savePerMonth: 10_000 };
+    expect(title([{ month: 50, type: 'sell', fund: 'gold' }], [], a)).toBe('normal');
+  });
+  it('振り落とされた人（握力切れで全部売り、そのまま戻らない）', () => {
+    expect(title([{ month: 50, type: 'letGo' }])).toBe('shakenOff');
+    // 握力切れのあと再開すれば当てはまらない
+    expect(title([{ month: 50, type: 'letGo' }, { month: 60, type: 'buy' }])).toBe('normal');
   });
   it('金の亡者（ゴールド中心で、ぜんぶ入りだけより少ない）', () => {
     const a: Allocation = { invest: { gold: 30_000, zenbu: 10_000 }, savePerMonth: 10_000 };

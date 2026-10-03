@@ -126,6 +126,8 @@ export class Hud {
       this.set(`chipv-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-val')!, v);
       this.set(`chipa-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-act')!, h.active ? '長押しで売る' : '押すと再開');
       c.el.classList.toggle('stopped', !h.active);
+      // 全部売っている間は、再開できることが分かるようにボタンを点滅させる
+      c.el.classList.toggle('beckon', !h.active && !game.invested);
     }
 
     const g = game.grip.value / CONFIG.grip.max;
@@ -240,7 +242,8 @@ export class Hud {
   trade(type: 'sell' | 'letGo' | 'buy', recs: TradeRecord[]): void {
     const amount = recs.reduce((s, r) => s + r.amount, 0);
     const names = recs.map((r) => fundDef(r.fund).short).join('・');
-    if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ`, 'bad', 3);
+    if (type === 'letGo')
+      this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ。下のボタンを押すと再開できる`, 'bad', 3.5);
     else if (type === 'sell') this.banner(`${names}を売って貯金へ（${man(amount)}）。以降の積立分も貯金に回る`, 'bad', 2.8);
     else this.banner(`${names}を再開！ 移していた${man(amount)}で買い直した`, 'good');
   }

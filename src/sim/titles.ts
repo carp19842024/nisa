@@ -11,6 +11,7 @@ export type TitleId =
   | 'lifeLoser'
   | 'rocketDreamer'
   | 'timingWizard'
+  | 'shakenOff'
   | 'getOff'
   | 'goldBug'
   | 'normal';
@@ -28,7 +29,8 @@ export const TITLES: Record<TitleId, Omit<Title, 'id'>> = {
   lifeLoser: { name: '生活に負けた人', description: '暴落ではなく、生活のために売らされた。' },
   rocketDreamer: { name: 'ロケットに夢を見た人', description: 'テーマ型に賭けて、途中で手を放した。' },
   timingWizard: { name: 'タイミングの魔術師（自称）', description: '売って、買って、また売った。' },
-  getOff: { name: '途中下車', description: '一度降りて、最後まで戻らなかった。' },
+  shakenOff: { name: '振り落とされた人', description: '握力が尽きて手を離し、そのまま戻れなかった。' },
+  getOff: { name: '途中下車', description: '自分で降りて、最後まで戻らなかった。' },
   goldBug: { name: '金の亡者', description: '金に守られたけど、株の上昇は取り逃がした。' },
   normal: { name: 'ふつうにえらい', description: '迷いながらも、なんとか続けた。' },
 };
@@ -61,7 +63,11 @@ export function determineTitle(summary: SimSummary, market: Market, ctx: TitleCo
   const saleActions = summary.sellCount + summary.letGoCount;
   if (Math.min(saleActions, summary.buyCount) >= tc.timingWizardCount) return make('timingWizard');
 
-  if (sales.length > 0 && !summary.endedInvested) return make('getOff');
+  // 最後に1本も積立していない（全部降りたまま）。最後に降りたのが握力切れなら「振り落とされた」
+  const noneActive = summary.byFund.every((b) => !b.endedActive);
+  if (sales.length > 0 && noneActive) {
+    return make(sales[sales.length - 1].type === 'letGo' ? 'shakenOff' : 'getOff');
+  }
 
   if (share('gold') >= tc.heavyShare && summary.finalValue < ctx.zenbuOnlyFinal) return make('goldBug');
 

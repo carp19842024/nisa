@@ -897,3 +897,21 @@ button {
   color: var(--muted);
   font-size: 11px;
 }
+
+.fund-chip.beckon {
+  animation: beckon 0.8s steps(2) infinite;
+}
+
+@keyframes beckon {
+  50% {
+    border-color: var(--yellow);
+    background: #2d3a1d;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fund-chip.beckon {
+    animation: none;
+    border-color: var(--yellow);
+  }
+}
