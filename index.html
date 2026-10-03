@@ -20,17 +20,17 @@
           <div id="hud" class="layer hidden">
             <div class="hud-top">
               <span id="hud-date">1年目 1月</span>
-              <span id="hud-state" class="state-chip">NISA保有中</span>
+              <span id="hud-state" class="state-chip">NISA積立中</span>
               <button id="pause-btn" class="icon-btn" aria-label="一時停止">II</button>
             </div>
             <div class="hud-grid">
-              <div><small id="hud-value-label">評価額</small><b id="hud-value">0</b></div>
-              <div><small id="hud-principal-label">元本</small><b id="hud-principal">0</b></div>
+              <div><small>NISA評価額</small><b id="hud-value">0</b></div>
+              <div><small>元本</small><b id="hud-principal">0</b></div>
               <div><small>損益</small><b id="hud-profit">0</b></div>
-              <div><small id="hud-emergency-label">生活防衛資金</small><b id="hud-emergency">0</b></div>
+              <div><small>生活防衛資金</small><b id="hud-emergency">0</b></div>
             </div>
             <div id="hud-hold" class="hud-hold hidden">
-              <small>ずっと持っていたら</small><b id="hud-hold-value">0</b><b id="hud-hold-diff" class="minus">0</b>
+              <small>NISAから移した貯金</small><b id="hud-cash">0</b><small>持っていたら</small><b id="hud-hold-diff">0</b>
             </div>
             <div class="grip-row">
               <small>握力</small>
@@ -48,12 +48,8 @@
 
           <!-- 操作ボタン -->
           <div id="controls" class="hidden">
-            <button id="sell-btn" class="hold-btn" type="button">
-              <span class="hold-fill"></span>
-              <span class="hold-label">長押しで <b>売る</b>（NISA→貯金）</span>
-            </button>
-            <button id="buy-btn" class="buy-btn hidden" type="button"><b>NISAを再開</b> <small id="buy-amount"></small></button>
-            <p class="key-hint">PC：スペース＝しがみつく／S長押し＝売る／B＝NISA再開</p>
+            <div id="fund-chips" class="fund-chips"></div>
+            <p class="key-hint">PC：スペース＝しがみつく／1〜4長押し＝そのファンドを売る（停止中は押すと再開）／S長押し＝全部売る／B＝全部再開</p>
           </div>
 
           <!-- 画面（HTML） -->

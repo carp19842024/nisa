@@ -1,12 +1,13 @@
 // 本編中の HTML 部分：HUD、コメント、バナー、ライフイベントのモーダル
 
-import { CONFIG } from '../config';
+import { CONFIG, type FundConfig, type FundId } from '../config';
 import { COMMENTS, commentTier } from '../game/comments';
 import type { Game } from '../game/loop';
 import type { Overlay } from '../game/renderer';
 import type { SpriteSet } from '../game/sprites';
-import type { LifeEventOutcome } from '../sim/portfolio';
+import type { LifeEventOutcome, TradeRecord } from '../sim/portfolio';
 import { $, show, spriteCanvas } from './dom';
+import { setupHoldButton, type HoldButton } from './hold';
 import { escapeHtml, man, manSigned, monthLabel, pctSigned, signClass } from './format';
 
 export class Hud {
@@ -15,16 +16,12 @@ export class Hud {
     date: $('hud-date'),
     state: $('hud-state'),
     value: $('hud-value'),
-    valueLabel: $('hud-value-label'),
-    principalLabel: $('hud-principal-label'),
-    emergencyLabel: $('hud-emergency-label'),
-    buyAmount: $('buy-amount'),
-    hold: $('hud-hold'),
-    holdValue: $('hud-hold-value'),
-    holdDiff: $('hud-hold-diff'),
     principal: $('hud-principal'),
     profit: $('hud-profit'),
     emergency: $('hud-emergency'),
+    hold: $('hud-hold'),
+    cash: $('hud-cash'),
+    holdDiff: $('hud-hold-diff'),
     gripFill: $('grip-fill'),
     dd: $('hud-dd'),
     comments: $('comments'),
@@ -32,13 +29,13 @@ export class Hud {
     tapPrompt: $('tap-prompt'),
     banner: $('banner'),
     controls: $('controls'),
-    sellBtn: $('sell-btn'),
-    buyBtn: $('buy-btn'),
+    chips: $('fund-chips'),
     modal: $('modal'),
   };
   private last: Record<string, string> = {};
   private commentAcc = 0;
   private bannerTimer = 0;
+  private chips: { fund: FundId; el: HTMLElement; hold: HoldButton }[] = [];
 
   constructor(private sprites: SpriteSet) {}
 
@@ -66,6 +63,39 @@ export class Hud {
     if (cls !== undefined) el.className = cls;
   }
 
+  /** 画面下のファンドごとのボタン。積立中は長押しで売る、停止中は押すと再開 */
+  setupChips(game: Game, onSell: (f: FundId) => void, onBuy: (f: FundId) => void): void {
+    this.resetHolds();
+    this.last = {};
+    const box = this.els.chips;
+    box.replaceChildren();
+    this.chips = game.portfolio.funds.map((fund) => {
+      const def = fundDef(fund);
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'fund-chip';
+      el.style.setProperty('--fund', def.color);
+      el.innerHTML = `<span class="hold-fill"></span><span class="chip-name"></span><span class="chip-val"></span><span class="chip-act"></span>`;
+      el.querySelector('.chip-name')!.textContent = def.short;
+      const hold = setupHoldButton(el, CONFIG.controls.sellHoldMs, () => onSell(fund), {
+        canHold: () => game.portfolio.holding(fund).active,
+        onTap: () => onBuy(fund),
+      });
+      box.appendChild(el);
+      return { fund, el, hold };
+    });
+    box.style.setProperty('--n', String(this.chips.length));
+  }
+
+  /** キーボード用：i 番目のファンドボタン */
+  chip(i: number): HoldButton | null {
+    return this.chips[i]?.hold ?? null;
+  }
+
+  resetHolds(): void {
+    for (const c of this.chips) c.hold.reset();
+  }
+
   update(game: Game, overlay: Overlay, dtSec: number): void {
     const pf = game.portfolio;
     const value = game.value;
@@ -73,40 +103,35 @@ export class Hud {
     const rate = pf.contributed > 0 ? profit / pf.contributed : 0;
     const e = this.els;
 
+    const stopped = pf.funds.filter((f) => !pf.holding(f).active).length;
+    const state = stopped === 0 ? 'NISA積立中' : stopped === pf.funds.length ? 'NISA停止中（貯金）' : `${stopped}本 停止中`;
     this.set('date', e.date, monthLabel(Math.min(game.currentMonth, CONFIG.months - 1)));
+    this.set('state', e.state, state, stopped === 0 ? 'state-chip' : 'state-chip sold');
+    this.set('value', e.value, man(game.nisaValue));
+    this.set('principal', e.principal, man(pf.contributed));
     this.set('profit', e.profit, pctSigned(rate), signClass(profit));
-    if (game.invested) {
-      this.set('state', e.state, 'NISA保有中', 'state-chip');
-      this.set('valueLabel', e.valueLabel, '評価額');
-      this.set('value', e.value, man(value));
-      this.set('principalLabel', e.principalLabel, '元本');
-      this.set('principal', e.principal, man(pf.contributed));
-      this.set('emergencyLabel', e.emergencyLabel, '生活防衛資金');
-      this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
-    } else {
-      // 売却中＝NISAをやめて貯金に移した状態。毎月の積立額も貯金に回る
-      const savings = pf.emergency + pf.cash;
-      this.set('state', e.state, 'NISA停止中（貯金）', 'state-chip sold');
-      this.set('valueLabel', e.valueLabel, 'NISA');
-      this.set('value', e.value, '0円（売却済み）');
-      this.set('principalLabel', e.principalLabel, '貯金の合計');
-      this.set('principal', e.principal, man(savings), savings < 0 ? 'minus' : '');
-      this.set('emergencyLabel', e.emergencyLabel, 'うちNISAから移した分');
-      this.set('emergency', e.emergency, man(pf.cash), '');
-      this.set('buyAmount', e.buyAmount, `（移した${man(pf.cash)}で買い直す）`);
-      const hold = game.holdValue;
-      this.set('holdValue', e.holdValue, man(hold));
-      this.set('holdDiff', e.holdDiff, `差 ${manSigned(value - hold)}`, signClass(value - hold));
+    this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
+
+    // 売ったファンドがあるとき：移した貯金と、売らずに持っていたらとの差
+    show(e.hold, stopped > 0);
+    if (stopped > 0) {
+      const diff = value - game.holdValue;
+      this.set('cash', e.cash, man(pf.cash));
+      this.set('holdDiff', e.holdDiff, `差 ${manSigned(diff)}`, signClass(diff));
     }
-    show(e.hold, !game.invested);
+
+    for (const c of this.chips) {
+      const h = pf.holding(c.fund);
+      const v = h.active ? man(game.fundValue(c.fund)) : `貯金 ${man(h.cash)}`;
+      this.set(`chipv-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-val')!, v);
+      this.set(`chipa-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-act')!, h.active ? '長押しで売る' : '押すと再開');
+      c.el.classList.toggle('stopped', !h.active);
+    }
 
     const g = game.grip.value / CONFIG.grip.max;
     e.gripFill.style.width = `${Math.round(g * 100)}%`;
     this.set('grip', e.gripFill, '', g >= 0.5 ? '' : g >= 0.3 ? 'mid' : 'low');
     this.set('dd', e.dd, game.drawdown > 0.01 ? `高値${pctSigned(-game.drawdown, 0)}` : '');
-
-    show(e.sellBtn, game.invested);
-    show(e.buyBtn, !game.invested);
 
     // 前の高値ラベル・連打の指示
     if (overlay.peakLabelY !== null) {
@@ -172,8 +197,9 @@ export class Hud {
     const rows: string[] = [];
     if (o.fromEmergency > 0) rows.push(`<div><span>生活防衛資金から</span><span>${man(o.fromEmergency)}</span></div>`);
     if (o.fromCash > 0) rows.push(`<div><span>NISAから移した貯金から</span><span>${man(o.fromCash)}</span></div>`);
-    if (o.forcedSale > 0)
-      rows.push(`<div class="minus"><span>ファンドを強制売却</span><span>${man(o.forcedSale)}</span></div>`);
+    for (const [f, amt] of Object.entries(o.forcedByFund)) {
+      rows.push(`<div class="minus"><span>${escapeHtml(fundDef(f as FundId).short)}を強制売却</span><span>${man(amt!)}</span></div>`);
+    }
     if (o.debt > 0) rows.push(`<div class="minus"><span>足りずに借金</span><span>${man(o.debt)}</span></div>`);
 
     let comment = '生活防衛資金で払えた。貯金しておいてよかった…！';
@@ -211,9 +237,17 @@ export class Hud {
   }
 
   /** 売却（NISA→貯金）・買い直し（NISA再開）の通知 */
-  trade(type: 'sell' | 'letGo' | 'buy', amount: number): void {
-    if (type === 'sell') this.banner(`NISAを全部売って貯金へ（${man(amount)}）。毎月の積立分も貯金に回る`, 'bad', 2.8);
-    else if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ`, 'bad', 3);
-    else this.banner(`NISA再開！ 移していた${man(amount)}で買い直した`, 'good');
+  trade(type: 'sell' | 'letGo' | 'buy', recs: TradeRecord[]): void {
+    const amount = recs.reduce((s, r) => s + r.amount, 0);
+    const names = recs.map((r) => fundDef(r.fund).short).join('・');
+    if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ`, 'bad', 3);
+    else if (type === 'sell') this.banner(`${names}を売って貯金へ（${man(amount)}）。以降の積立分も貯金に回る`, 'bad', 2.8);
+    else this.banner(`${names}を再開！ 移していた${man(amount)}で買い直した`, 'good');
   }
+}
+
+export function fundDef(f: FundId): FundConfig {
+  const d = CONFIG.funds.find((x) => x.id === f);
+  if (!d) throw new Error(`unknown fund ${f}`);
+  return d;
 }

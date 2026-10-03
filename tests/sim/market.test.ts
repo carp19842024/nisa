@@ -77,3 +77,52 @@ describe('market', () => {
     expect(dd.maxDrawdown).toBeCloseTo(0.5);
   });
 });
+
+describe('ファンド', () => {
+  it('すべてのファンドの値動きがあり、同じシードで同じになる', () => {
+    const a = generateMarket(55);
+    const b = generateMarket(55);
+    for (const f of CONFIG.funds) {
+      expect(a.funds[f.id]).toHaveLength(CONFIG.months + 1);
+      expect(a.funds[f.id]).toEqual(b.funds[f.id]);
+      for (const p of a.funds[f.id]!) expect(p).toBeGreaterThan(0);
+    }
+    expect(a.fundBusts).toEqual(b.fundBusts);
+  });
+
+  it('ぜんぶ入りファンドは市場全体の指数と同じ値動き', () => {
+    const m = generateMarket(9);
+    m.prices.forEach((p, i) => expect(m.funds.zenbu![i]).toBeCloseTo(p, 6));
+  });
+
+  it('ずるずる型の下落中、ロケットは市場より深く、バランスは浅く下がり、ゴールドは上がりやすい', () => {
+    let rocketDeeper = 0;
+    let mattariShallower = 0;
+    let goldUp = 0;
+    const n = 100;
+    for (let seed = 1; seed <= n; seed++) {
+      const m = generateMarket(seed);
+      const z = m.scenarios.find((s) => s.id === 'zuruzuru')!;
+      const chg = (p: number[]) => p[z.bottomMonth] / p[z.startMonth] - 1;
+      const mk = chg(m.prices);
+      if (chg(m.funds.rocket!) < mk) rocketDeeper++;
+      if (chg(m.funds.mattari!) > mk) mattariShallower++;
+      if (chg(m.funds.gold!) > 0) goldUp++;
+    }
+    expect(rocketDeeper / n).toBeGreaterThan(0.75);
+    expect(mattariShallower / n).toBeGreaterThan(0.9);
+    expect(goldUp / n).toBeGreaterThan(0.6);
+  });
+
+  it('ロケットのブーム終了は、期間内に収まる', () => {
+    let count = 0;
+    for (let seed = 1; seed <= 200; seed++) {
+      for (const b of generateMarket(seed).fundBusts) {
+        count++;
+        expect(b.fund).toBe('rocket');
+        expect(b.bottomMonth).toBeLessThan(CONFIG.months);
+      }
+    }
+    expect(count).toBeGreaterThan(50);
+  });
+});

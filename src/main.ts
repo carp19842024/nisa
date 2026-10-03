@@ -6,7 +6,7 @@ import { CONFIG } from './config';
 import { Game } from './game/loop';
 import { Renderer, VIEW_H, VIEW_W } from './game/renderer';
 import { loadSprites, placeholderSprites, type SpriteSet } from './game/sprites';
-import type { Allocation } from './sim/portfolio';
+import { totalInvest, type Allocation } from './sim/portfolio';
 import { evaluateGame, type GameResult } from './sim/result';
 import { parseSeed, randomSeed } from './sim/rng';
 import { $, show } from './ui/dom';
@@ -42,8 +42,8 @@ const urlSeed = parseSeed(new URLSearchParams(location.search).get('seed'));
 let screen: Screen = 'title';
 let game: Game | null = null;
 let allocation: Allocation = {
-  investPerMonth: CONFIG.money.defaultInvest,
-  savePerMonth: CONFIG.money.monthlyBudget - CONFIG.money.defaultInvest,
+  invest: { ...CONFIG.money.defaultInvest },
+  savePerMonth: CONFIG.money.monthlyBudget - totalInvest({ invest: CONFIG.money.defaultInvest, savePerMonth: 0 }),
 };
 /** 「設定を変えてもう一度」のときは同じ相場（シード）で遊ぶ */
 let setupSeed: number | null = null;
@@ -125,18 +125,19 @@ function startGame(seed: number): void {
   renderer.resetCamera();
   game = new Game(seed, allocation, {
     onLifeEvent: (outcome) => {
-      sellHold.reset();
+      resetHolds();
       hud.showLifeEvent(outcome, () => game?.resume());
     },
     onScenarioStart: (sc) => hud.banner(CONFIG.scenarios[sc.id].banner, sc.isCrash ? 'bad' : 'normal', 2.2),
-    onTrade: (rec) => hud.trade(rec.type, rec.amount),
+    onFundBust: (b) => hud.banner(b.banner, 'bad', 2.4),
+    onTrade: (type, recs) => hud.trade(type, recs),
     onCelebrate: () => {
       renderer.celebrate();
       hud.banner('前の高値を超えた！ 耐えた甲斐があった！', 'good', 2.2);
     },
     onEnd: (actions) => {
       const g = game!;
-      sellHold.reset();
+      resetHolds();
       hud.banner('20年が経った…', 'normal', 1.5);
       setTimeout(() => {
         const res = evaluateGame(g.market, g.allocation, g.events, actions);
@@ -161,6 +162,13 @@ function startGame(seed: number): void {
     },
   });
   go('game');
+  hud.setupChips(
+    game,
+    (f) => game?.sell(f),
+    (f) => {
+      if (isRunning()) game?.buyBack(f);
+    },
+  );
   game.start();
 }
 
@@ -205,12 +213,15 @@ async function share(res: GameResult): Promise<void> {
 // ---------------------------------------------------------------------------
 // 入力
 
-const sellHold = setupHoldButton($('sell-btn'), CONFIG.controls.sellHoldMs, () => game?.sell());
-$('buy-btn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  game?.buyBack();
-});
-$('buy-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
+// PC の S キー長押し＝積立中のファンドを全部売る（画面上のボタンは無し）
+const sellAllHold = setupHoldButton(document.createElement('div'), CONFIG.controls.sellHoldMs, () => game?.sell());
+
+function resetHolds(): void {
+  sellAllHold.reset();
+  hud.resetHolds();
+}
+
+const DIGIT_KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
 
 function isRunning(): boolean {
   return screen === 'game' && !!game && !game.paused && !game.userPaused && !game.finished;
@@ -219,7 +230,7 @@ function isRunning(): boolean {
 function setPaused(p: boolean): void {
   if (!game || screen !== 'game' || game.finished) return;
   game.userPaused = p;
-  if (p) sellHold.reset();
+  if (p) resetHolds();
   show(pauseOverlay, p);
 }
 
@@ -242,7 +253,9 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (!e.repeat) game.tap();
   } else if (e.code === 'KeyS') {
-    if (!e.repeat && isRunning() && game.invested) sellHold.press();
+    if (!e.repeat && isRunning() && game.invested) sellAllHold.press();
+  } else if (DIGIT_KEYS.includes(e.code)) {
+    if (!e.repeat && isRunning()) hud.chip(DIGIT_KEYS.indexOf(e.code))?.press();
   } else if (e.code === 'KeyB') {
     if (isRunning()) game.buyBack();
   } else if (e.code === 'Escape' || e.code === 'KeyP') {
@@ -250,7 +263,8 @@ window.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'KeyS') sellHold.release();
+  if (e.code === 'KeyS') sellAllHold.release();
+  if (DIGIT_KEYS.includes(e.code)) hud.chip(DIGIT_KEYS.indexOf(e.code))?.release();
 });
 
 $('pause-btn').addEventListener('click', () => setPaused(true));

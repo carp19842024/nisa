@@ -13,7 +13,7 @@ export function renderDisclaimer(el: HTMLElement, opts: { firstTime: boolean; on
     </div>
     <div class="card small">
       <p>遊び方：平常時は見ているだけでOK。暴落が来たら画面を<b>連打</b>して握力を保とう。握力が尽きると手を離して全部売ってしまいます。</p>
-      <p>「売る」は1秒長押しで確定。NISAを全部売って貯金に移し、以降の積立分も貯金に回ります。「NISAを再開」で、移した分を使って買い直せます。</p>
+      <p>画面下のファンドのボタンを1秒長押しすると、そのファンドを全部売って貯金に移します（以降、そのファンドの積立分も貯金へ）。停止中のボタンを押すと、移した分で買い直して再開します。</p>
     </div>
     <div class="spacer"></div>
     <button class="btn primary" id="disc-ok" type="button">${opts.firstTime ? '理解しました' : 'OK'}</button>

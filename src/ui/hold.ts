@@ -1,4 +1,5 @@
 // 長押しボタン（誤操作防止）。指を離すとキャンセル。
+// canHold() が false のときは長押しではなく、押した瞬間に onTap を呼ぶ（停止中のファンドの「再開」など）。
 
 export interface HoldButton {
   press(): void;
@@ -6,7 +7,12 @@ export interface HoldButton {
   reset(): void;
 }
 
-export function setupHoldButton(btn: HTMLElement, holdMs: number, onConfirm: () => void): HoldButton {
+export interface HoldOptions {
+  canHold?: () => boolean;
+  onTap?: () => void;
+}
+
+export function setupHoldButton(btn: HTMLElement, holdMs: number, onConfirm: () => void, opts: HoldOptions = {}): HoldButton {
   const fill = btn.querySelector<HTMLElement>('.hold-fill');
   let start = 0;
   let raf = 0;
@@ -29,6 +35,10 @@ export function setupHoldButton(btn: HTMLElement, holdMs: number, onConfirm: () 
   const api: HoldButton = {
     press() {
       if (start) return;
+      if (opts.canHold && !opts.canHold()) {
+        opts.onTap?.();
+        return;
+      }
       start = performance.now();
       btn.classList.add('pressing');
       raf = requestAnimationFrame(tick);

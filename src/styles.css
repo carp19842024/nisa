@@ -738,3 +738,162 @@ button {
   display: block;
   font-size: 12px;
 }
+
+/* ファンドごとのボタン（積立中：長押しで売る／停止中：押すと再開） */
+.fund-chips {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.fund-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 62px;
+  padding: 2px;
+  overflow: hidden;
+  border: 3px solid var(--fund, var(--mint));
+  border-radius: 6px;
+  background: #2a1e3a;
+  box-shadow: 0 3px 0 #000;
+  line-height: 1.25;
+}
+
+.fund-chip.pressing {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #000;
+}
+
+.fund-chip .hold-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: var(--red);
+}
+
+.fund-chip > span:not(.hold-fill) {
+  position: relative;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chip-name {
+  font-size: 13px;
+  color: var(--fund, var(--mint));
+}
+
+.chip-val {
+  font-size: 12px;
+}
+
+.chip-act {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.fund-chip.stopped {
+  background: #1d2a3a;
+  border-style: dashed;
+}
+
+.fund-chip.stopped .chip-act {
+  color: var(--mint);
+}
+
+.hud-hold small:nth-of-type(2) {
+  flex: none;
+}
+
+#controls {
+  height: auto;
+}
+
+/* 積立設定：ファンドの行 */
+.fund-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 6px 8px;
+  border-left: 4px solid var(--fund, var(--line));
+  margin: 6px 0;
+}
+
+.fund-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
+}
+
+.fund-info b {
+  font-weight: normal;
+  font-size: 14px;
+  color: var(--fund, var(--text));
+}
+
+.fund-row.ineligible {
+  opacity: 0.45;
+  border-left-style: dashed;
+}
+
+.fund-row.ineligible b {
+  text-decoration: line-through;
+}
+
+.stepper-mini {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.stepper-mini b {
+  min-width: 46px;
+  text-align: center;
+  font-weight: normal;
+  font-size: 15px;
+}
+
+.stepper-mini button {
+  width: 34px;
+  height: 34px;
+  font-size: 18px;
+  border: 3px solid #000;
+  background: var(--panel-solid);
+  border-radius: 6px;
+  box-shadow: 0 2px 0 #000;
+}
+
+.stepper-mini button:disabled {
+  opacity: 0.35;
+}
+
+.alloc-bar span {
+  color: #10132f;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.alloc-bar span.sav {
+  color: var(--text);
+}
+
+.fund-table td {
+  padding-left: 8px;
+}
+
+.fund-table tr:first-child td {
+  color: var(--muted);
+  font-size: 11px;
+}

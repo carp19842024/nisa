@@ -1,10 +1,11 @@
 // 結果画面
 
-import { CONFIG } from '../config';
+import { CONFIG, type FundId } from '../config';
 import type { SpriteSet } from '../game/sprites';
 import type { Market } from '../sim/market';
 import type { GameResult } from '../sim/result';
 import { spriteCanvas } from './dom';
+import { fundDef } from './hud';
 import { escapeHtml, man, manSigned, monthLabel, pctSigned, signClass } from './format';
 
 export interface ResultHandlers {
@@ -30,7 +31,10 @@ export function renderResult(
     .map((o) => {
       const where = o.drawdown >= 0.2 ? '底値で' : o.drawdown >= 0.1 ? '下落中に' : '';
       const dd = o.drawdown >= 0.05 ? `（高値から${pctSigned(-o.drawdown, 0)}）` : '';
-      return `<li>${monthLabel(o.event.month)}：「${escapeHtml(o.event.name)}」のために${where}${man(o.forcedSale)}分を売った${dd}</li>`;
+      const which = Object.keys(o.forcedByFund)
+        .map((f) => fundDef(f as FundId).short)
+        .join('・');
+      return `<li>${monthLabel(o.event.month)}：「${escapeHtml(o.event.name)}」のために${where}${escapeHtml(which)}を${man(o.forcedSale)}分売った${dd}</li>`;
     });
   const debt = a.eventOutcomes.reduce((s, o) => s + o.debt, 0);
 
@@ -48,19 +52,37 @@ export function renderResult(
         <tr><th>損益</th><td class="${signClass(a.profit)}">${manSigned(a.profit)}（${pctSigned(a.profitRate)}）</td></tr>
         <tr class="sep big"><th>ずっと持ち続けていたら</th><td>${man(res.hold.finalValue)}</td></tr>
         <tr><th>その差額</th><td class="${signClass(res.diffFromHold)}">${manSigned(res.diffFromHold)}</td></tr>
-        <tr class="sep"><th>売却回数</th><td>${a.sellCount}回</td></tr>
+        ${
+          res.allocation.invest.zenbu === undefined || Object.keys(res.allocation.invest).length > 1
+            ? `<tr><th>ぜんぶ入りファンドだけを<br>持ち続けていたら</th><td>${man(res.zenbuOnly.finalValue)}</td></tr>`
+            : ''
+        }
+        <tr class="sep"><th>売却回数（ファンドごと）</th><td>${a.sellCount}回</td></tr>
         <tr><th>手を離した回数</th><td>${a.letGoCount}回</td></tr>
         <tr><th>NISAを再開した回数</th><td>${a.buyCount}回</td></tr>
         <tr><th>ライフイベントで強制的に売った額</th><td>${man(a.forcedSaleTotal)}</td></tr>
         <tr class="sep"><th>NISAで非課税になった額<br><span class="small">（課税口座なら払っていた税金の目安：利益×${(CONFIG.tax.rate * 100).toFixed(3)}%）</span></th><td>${man(a.taxSaved)}</td></tr>
+        <tr><th>手数料（信託報酬）の目安</th><td>${man(a.feeTotal)}</td></tr>
         <tr><th>生活防衛資金の残り</th><td class="${a.emergencyFinal < 0 ? 'minus' : ''}">${man(a.emergencyFinal)}</td></tr>
       </table>
       ${forcedLines.length ? `<ul class="forced-list">${forcedLines.join('')}</ul>` : ''}
+    </div>
+    <div class="card">
+      <table class="result-table fund-table">
+        <tr><th>ファンド</th><td>最終</td><td>損益</td></tr>
+        ${a.byFund
+          .map((b) => {
+            const d = fundDef(b.fund);
+            const state = b.endedActive ? '' : '<br><span class="small">（売ったまま）</span>';
+            return `<tr><th style="color:${d.color}">${escapeHtml(d.short)}${state}</th><td>${man(b.finalValue)}</td><td class="${signClass(b.profit)}">${manSigned(b.profit)}</td></tr>`;
+          })
+          .join('')}
+      </table>
       ${debt > 0 ? `<p class="small minus">お金が足りず、${man(debt)}を借金でしのいだ。</p>` : ''}
     </div>
     <div class="card">
       <canvas id="result-chart"></canvas>
-      <div class="legend"><span style="color:#ff5a6e">▼売った</span><span style="color:#ffb347">▼手を離した</span><span style="color:#8fe3c4">▲再開（買い直し）</span><span style="color:#c99bff">●強制売却</span></div>
+      <div class="legend"><span style="color:#ff5a6e">▼売った</span><span style="color:#ffb347">▼手を離した</span><span style="color:#8fe3c4">▲再開した</span><span style="color:#c99bff">●強制売却</span></div>
     </div>
     <p class="small" style="text-align:center;margin:8px 0 0">シード：${res.seed}（同じシードなら同じ値動き）</p>
     <button class="btn primary" id="r-retry" type="button">もう一度（新しい相場）</button>

@@ -1,7 +1,7 @@
 // 値動きの生成。幾何ブラウン運動に暴落シナリオを重ねる。
 // 描画には一切依存しない純粋なロジック。
 
-import { CONFIG, type Config, type ScenarioConfig, type ScenarioId } from '../config';
+import { CONFIG, type Config, type FundId, type ScenarioConfig, type ScenarioId } from '../config';
 import { createRng, deriveSeed, type Rng } from './rng';
 
 export interface ScenarioInstance {
@@ -18,11 +18,32 @@ export interface ScenarioInstance {
   keypoints: [number, number][];
 }
 
+/** テーマ型ファンド独自の暴落（ブーム終了） */
+export interface FundBustInstance {
+  fund: FundId;
+  name: string;
+  banner: string;
+  startMonth: number;
+  bottomMonth: number;
+  endMonth: number;
+  keypoints: [number, number][];
+}
+
 export interface Market {
   seed: number;
-  /** 月初の基準価額。長さ months + 1（index 0 = 開始時、index months = 最終） */
+  /** 市場全体の指数（月初）。長さ months + 1（index 0 = 開始時、index months = 最終）。暴落の判定や称号に使う */
   prices: number[];
+  /** ファンドごとの基準価額（月初）。長さ months + 1 */
+  funds: Partial<Record<FundId, number[]>>;
   scenarios: ScenarioInstance[];
+  fundBusts: FundBustInstance[];
+}
+
+/** ファンドの基準価額の列。無ければエラー */
+export function fundPrices(market: Market, fund: FundId): number[] {
+  const p = market.funds[fund];
+  if (!p) throw new Error(`ファンド ${fund} の値動きがありません`);
+  return p;
 }
 
 function buildScenario(id: ScenarioId, rng: Rng, cfg: Config): Omit<ScenarioInstance, 'startMonth' | 'bottomMonth' | 'endMonth'> & { length: number; decline: number } {
@@ -126,11 +147,17 @@ export function generateMarket(seed: number, cfg: Config = CONFIG): Market {
 
   const findScenario = (m: number) => scenarios.find((s) => m >= s.startMonth && m < s.endMonth);
 
+  // 市場全体の指数。月ごとのふだんの値動き（shock）と暴落の重ね合わせ（overlayLog）を記録しておき、
+  // 各ファンドはそれに感応度をかけて作る
   const prices: number[] = [];
+  const shocks: number[] = [];
+  const driftScales: number[] = [];
+  const overlayLogs: number[] = [];
   let logBase = 0;
   for (let m = 0; m <= cfg.months; m++) {
     let overlay = 1;
     for (const s of scenarios) overlay *= overlayAt(s, m);
+    overlayLogs.push(Math.log(overlay));
     prices.push(mc.initialPrice * Math.exp(logBase) * overlay);
     if (m === cfg.months) break;
     const z = rng.normal();
@@ -138,9 +165,67 @@ export function generateMarket(seed: number, cfg: Config = CONFIG): Market {
     const sCfg = sc ? cfg.scenarios[sc.id] : null;
     const dScale = sCfg ? sCfg.driftScale : 1;
     const vScale = sCfg ? sCfg.volScale : 1;
+    shocks.push(vol * vScale * z);
+    driftScales.push(dScale);
     logBase += drift * dScale + vol * vScale * z;
   }
-  return { seed, prices, scenarios };
+
+  // ファンド独自の値動きとブーム終了は、市場とは別の乱数列（既存シードの市場の値動きを変えないため）
+  const fundRng = createRng(deriveSeed(seed, 3));
+  const fundBusts = placeFundBusts(createRng(deriveSeed(seed, 4)), cfg);
+  const funds: Partial<Record<FundId, number[]>> = {};
+  const logs = cfg.funds.map(() => 0);
+  const series = cfg.funds.map(() => [] as number[]);
+  for (let m = 0; m <= cfg.months; m++) {
+    cfg.funds.forEach((f, i) => {
+      let bust = 1;
+      for (const b of fundBusts) if (b.fund === f.id) bust *= keypointsAt(b.keypoints, m - b.startMonth);
+      series[i].push(mc.initialPrice * Math.exp(logs[i] + f.crashBeta * overlayLogs[m]) * bust);
+    });
+    if (m === cfg.months) break;
+    cfg.funds.forEach((f, i) => {
+      const idio = f.idioVol * Math.sqrt(dt) * fundRng.normal();
+      logs[i] += Math.log(1 + f.annualReturn) * dt * driftScales[m] + f.beta * shocks[m] + idio;
+    });
+  }
+  cfg.funds.forEach((f, i) => (funds[f.id] = series[i]));
+
+  return { seed, prices, funds, scenarios, fundBusts };
+}
+
+function keypointsAt(keypoints: [number, number][], local: number): number {
+  return overlayAt({ keypoints, startMonth: 0 } as ScenarioInstance, local);
+}
+
+/** テーマ型ファンドの「ブーム終了」を決める */
+function placeFundBusts(rng: Rng, cfg: Config): FundBustInstance[] {
+  const result: FundBustInstance[] = [];
+  for (const b of cfg.fundBusts) {
+    const roll = rng.next();
+    const decline = rng.int(b.declineMonths[0], b.declineMonths[1]);
+    const stagnant = rng.int(b.stagnantMonths[0], b.stagnantMonths[1]);
+    const latest = cfg.months - decline - 12;
+    const start = rng.int(b.earliestMonth, Math.max(b.earliestMonth, latest));
+    if (roll >= b.prob) continue;
+    const fund = cfg.funds.find((f) => f.id === b.fund);
+    const growth = fund ? Math.log(1 + fund.annualReturn) / 12 : 0;
+    const bottom = 1 - b.depth;
+    result.push({
+      fund: b.fund,
+      name: b.name,
+      banner: b.banner,
+      startMonth: start,
+      bottomMonth: start + decline,
+      endMonth: start + decline + stagnant,
+      // 底のあとはファンド本来の成長を打ち消して停滞させる（戻らないまま）
+      keypoints: [
+        [0, 1],
+        [decline, bottom],
+        [decline + stagnant, bottom * Math.exp(-growth * stagnant)],
+      ],
+    });
+  }
+  return result;
 }
 
 /** 連続時間 t（月）の価格。月と月の間は直線で補間する */

@@ -3,6 +3,46 @@
 
 export type ScenarioId = 'dokan' | 'zuruzuru' | 'oufuku' | 'yokobai';
 
+export type FundId = 'zenbu' | 'rocket' | 'mattari' | 'gold';
+
+export interface FundConfig {
+  id: FundId;
+  name: string;
+  /** ボタンなど狭い場所での表示名 */
+  short: string;
+  /** 一言説明 */
+  desc: string;
+  /** チャートなどの色 */
+  color: string;
+  /** 年率リターン（対数成長の中央値。信託報酬を引いた後） */
+  annualReturn: number;
+  /** 市場全体のふだんの値動きへの感応度 */
+  beta: number;
+  /** 暴落シナリオの効き方（1 = 市場と同じ、0.5 = 半分、マイナスなら逆に上がる） */
+  crashBeta: number;
+  /** ファンド独自の値動き（年率ボラティリティ） */
+  idioVol: number;
+  /** 信託報酬（年率）。値動きには織り込み済みで、結果画面の「手数料」表示に使う */
+  fee: number;
+  /** ブレの大きさの目安（★の数） */
+  risk: number;
+}
+
+/** テーマ型ファンド独自の暴落（ブーム終了） */
+export interface FundBustConfig {
+  fund: FundId;
+  name: string;
+  banner: string;
+  /** 20年のうちに起きる確率 */
+  prob: number;
+  depth: number;
+  declineMonths: [number, number];
+  /** 底のあと、ほとんど戻らずに停滞する月数 */
+  stagnantMonths: [number, number];
+  /** この月より後に起きる */
+  earliestMonth: number;
+}
+
 export interface ScenarioConfig {
   /** ゲーム内表示名 */
   name: string;
@@ -43,8 +83,8 @@ export const CONFIG = {
     monthlyBudget: 50_000,
     /** 配分の単位 */
     allocationUnit: 10_000,
-    /** 積立額の初期値 */
-    defaultInvest: 40_000,
+    /** 積立額の初期値（ファンドごと） */
+    defaultInvest: { zenbu: 40_000 } as Partial<Record<FundId, number>>,
     /** 積立額の下限（0にするとゲームにならないため） */
     minInvest: 10_000,
     /** 生活防衛資金の初期値 */
@@ -112,6 +152,78 @@ export const CONFIG = {
       volScale: 0.3,
     },
   } satisfies Record<ScenarioId, ScenarioConfig>,
+
+  /** 積立できるファンド（すべて架空）。並び順は画面の表示順 */
+  funds: [
+    {
+      id: 'zenbu',
+      name: 'ぜんぶ入りファンド',
+      short: 'ぜんぶ入り',
+      desc: '世界中の株にまるごと投資。王道。',
+      color: '#8fe3c4',
+      annualReturn: 0.05,
+      beta: 1,
+      crashBeta: 1,
+      idioVol: 0,
+      fee: 0.001,
+      risk: 3,
+    },
+    {
+      id: 'rocket',
+      name: 'ロケットテックファンド',
+      short: 'ロケット',
+      desc: '流行りのテーマに集中投資。当たれば大きい。',
+      color: '#ff8fb1',
+      annualReturn: 0.075,
+      beta: 1.4,
+      crashBeta: 1.5,
+      idioVol: 0.18,
+      fee: 0.015,
+      risk: 5,
+    },
+    {
+      id: 'mattari',
+      name: 'まったりバランスファンド',
+      short: 'バランス',
+      desc: '株と債券が半分ずつ。値動きはおだやか。',
+      color: '#7cc8ff',
+      annualReturn: 0.03,
+      beta: 0.45,
+      crashBeta: 0.45,
+      idioVol: 0.02,
+      fee: 0.003,
+      risk: 2,
+    },
+    {
+      id: 'gold',
+      name: 'キンキラ金ファンド',
+      short: 'ゴールド',
+      desc: '金に投資。株の暴落中は逆に上がりやすい。',
+      color: '#ffd166',
+      annualReturn: 0.025,
+      beta: -0.05,
+      crashBeta: -0.35,
+      idioVol: 0.13,
+      fee: 0.004,
+      risk: 3,
+    },
+  ] as FundConfig[],
+
+  /** 一覧には出るが、NISAでは買えないファンド（小ネタ） */
+  ineligibleFunds: [{ name: '毎月もらえる分配ファンド', reason: '毎月分配型はNISAでは買えません' }],
+
+  fundBusts: [
+    {
+      fund: 'rocket',
+      name: 'ブーム終了',
+      banner: 'ロケットテック：ブーム終了…',
+      prob: 0.55,
+      depth: 0.55,
+      declineMonths: [6, 10],
+      stagnantMonths: [36, 60],
+      earliestMonth: 24,
+    },
+  ] as FundBustConfig[],
 
   lifeEvents: {
     list: [
@@ -200,6 +312,10 @@ export const CONFIG = {
     lifeLoserThreshold: 300_000,
     /** タイミングの魔術師：売却と買い戻しの回数 */
     timingWizardCount: 3,
+    /** 分散の達人：積立したファンドの本数 */
+    diversifiedFunds: 3,
+    /** ロケットに夢を見た人／金の亡者：積立額に占める割合 */
+    heavyShare: 0.5,
   },
 
   storageKey: 'shigamitsuke.v1',

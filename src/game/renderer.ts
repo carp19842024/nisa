@@ -211,14 +211,25 @@ export class Renderer {
     if (heroY > HERO_MAX_Y) this.camLog = target + (HERO_MAX_Y - HERO_Y) / PX_PER_LOG;
   }
 
-  private drawChart(prices: readonly number[], t: number, peak: number, drawdown: number): number | null {
+  /**
+   * チャートを描く。series は月初ごとの値（floor(t) まで）、current は時刻 t の値。
+   * fundLines は背景に薄く描く各ファンドの値動き（今の位置で主線と重なるようにそろえる）
+   */
+  private drawChart(
+    series: readonly number[],
+    t: number,
+    current: number,
+    peak: number,
+    drawdown: number,
+    fundLines: { color: string; prices: readonly number[] }[] = [],
+  ): number | null {
     const ctx = this.ctx;
     const startM = Math.max(0, Math.floor(t - HERO_X / PX_PER_MONTH) - 1);
     const pts: { x: number; y: number; p: number }[] = [];
-    for (let m = startM; m <= Math.floor(t); m++) {
-      pts.push({ x: HERO_X + (m - t) * PX_PER_MONTH, y: this.yFor(prices[m]), p: prices[m] });
+    for (let m = startM; m <= Math.floor(t) && m < series.length; m++) {
+      pts.push({ x: HERO_X + (m - t) * PX_PER_MONTH, y: this.yFor(series[m]), p: series[m] });
     }
-    const pt = priceAt(prices, t);
+    const pt = current;
     pts.push({ x: HERO_X, y: this.yFor(pt), p: pt });
 
     // 年の目盛り
@@ -248,6 +259,26 @@ export class Renderer {
     ctx.closePath();
     ctx.fillStyle = drawdown > 0.1 ? 'rgba(255,90,110,0.16)' : 'rgba(143,227,196,0.16)';
     ctx.fill();
+
+    // 各ファンドの値動き（薄く）。2本以上持っているときだけ
+    if (fundLines.length > 1) {
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.55;
+      for (const fl of fundLines) {
+        const now = priceAt(fl.prices, t);
+        ctx.strokeStyle = fl.color;
+        ctx.beginPath();
+        for (let m = startM; m <= Math.floor(t) + 1; m++) {
+          const mm = Math.min(m, t);
+          const x = Math.round(HERO_X + (mm - t) * PX_PER_MONTH);
+          const y = Math.round(this.yFor((pt * priceAt(fl.prices, mm)) / now));
+          if (m === startM) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
 
     // 線（下がる区間は赤）
     ctx.lineWidth = 3;
@@ -390,7 +421,11 @@ export class Renderer {
     const scroll = game.t * PX_PER_MONTH;
     this.drawBackground(dd, scroll, game.elapsed);
     this.drawGround(scroll);
-    const peakY = this.drawChart(game.market.prices, game.t, game.peak, dd);
+    const fundLines = game.chartFunds.map((f) => ({
+      color: CONFIG.funds.find((c) => c.id === f.fund)?.color ?? '#ffffff',
+      prices: f.prices,
+    }));
+    const peakY = this.drawChart(game.history, game.t, game.price, game.peak, dd, fundLines);
     const hero = this.drawHero(game);
     this.updateParticles(dtSec);
     ctx.restore();
@@ -410,7 +445,7 @@ export class Renderer {
     this.updateCamera(p, dtSec);
     this.drawBackground(0, t * PX_PER_MONTH, time);
     this.drawGround(t * PX_PER_MONTH);
-    this.drawChart(prices, t, p, 0);
+    this.drawChart(prices, t, p, p, 0);
     const sprite = this.sprites.run;
     drawSprite(ctx, sprite, spriteFrame(sprite, time), HERO_X, this.yFor(p) + 2, 'bottom');
     this.updateParticles(dtSec);

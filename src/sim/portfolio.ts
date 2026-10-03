@@ -1,64 +1,86 @@
-// 積立・売却・買い戻し・強制売却。
+// 積立・売却・買い直し・強制売却（ファンドごと）。
 // 同じ入力（値動き・設定・イベント・操作ログ）からは必ず同じ結果になる。
+//
+// 売る ＝ そのファンドを全部売って貯金に移す（以降、そのファンドの積立分も貯金に回る）。
+// 買い直す ＝ そのファンドから移した貯金の分で、そのファンドを買い直して積立を再開する。
 
-import { CONFIG, type Config } from '../config';
+import { CONFIG, type Config, type FundId } from '../config';
 import type { LifeEvent } from './events';
-import type { Market } from './market';
+import { fundPrices, type Market } from './market';
 
 export interface Allocation {
-  /** 毎月の NISA 積立額（円） */
-  investPerMonth: number;
+  /** ファンドごとの毎月の NISA 積立額（円） */
+  invest: Partial<Record<FundId, number>>;
   /** 毎月の生活防衛資金への貯金額（円） */
   savePerMonth: number;
 }
 
+/** 積立額が 0 より大きいファンド（config の並び順） */
+export function allocatedFunds(a: Allocation, cfg: Config = CONFIG): FundId[] {
+  return cfg.funds.map((f) => f.id).filter((id) => (a.invest[id] ?? 0) > 0);
+}
+
+export function totalInvest(a: Allocation): number {
+  return Object.values(a.invest).reduce((s, v) => s + (v ?? 0), 0);
+}
+
 export type ActionType = 'sell' | 'letGo' | 'buy';
 
-/** プレイヤーの操作ログ1件。month の月初処理の後に実行される */
+/**
+ * プレイヤーの操作ログ1件。month の月初処理の後に実行される。
+ * fund を省略すると、売るときは積立中の全ファンド、買い直すときは停止中の全ファンドが対象。
+ * letGo（握力切れ）は常に全ファンド。
+ */
 export interface PlayerAction {
   month: number;
   type: ActionType;
+  fund?: FundId;
 }
 
 export interface TradeRecord {
   month: number;
   type: ActionType;
+  fund: FundId;
   price: number;
   amount: number;
 }
 
 export interface LifeEventOutcome {
   event: LifeEvent;
+  /** 市場全体の指数 */
   price: number;
-  /** 直近高値からの下落率 */
+  /** 市場全体の直近高値からの下落率 */
   drawdown: number;
   fromEmergency: number;
-  /** 売却中の現金から払った額 */
+  /** NISAから移した貯金から払った額 */
   fromCash: number;
-  /** ファンドを強制的に売った額 */
+  /** ファンドを強制的に売った額（合計） */
   forcedSale: number;
+  /** ファンドごとの強制売却額 */
+  forcedByFund: Partial<Record<FundId, number>>;
   /** それでも足りず、借金（防衛資金のマイナス）になった額 */
   debt: number;
 }
 
-export interface PortfolioSnapshot {
+export interface Holding {
   units: number;
+  /** このファンドを売って貯金に移した分（＋停止中の積立分） */
   cash: number;
-  invested: boolean;
-  emergency: number;
+  /** 積立中か（false = 売って停止中） */
+  active: boolean;
   contributed: number;
   withdrawn: number;
+  /** 信託報酬の目安（累計） */
+  fee: number;
 }
 
 export class Portfolio {
-  units = 0;
-  /** 売却中にファンドの外に置いている現金（NISA 用のお金） */
-  cash = 0;
-  invested = true;
+  readonly holdings: Partial<Record<FundId, Holding>> = {};
+  readonly funds: FundId[];
   emergency: number;
-  /** 積立元本（積み立てた額の合計） */
+  /** 積立元本（積み立てた額の合計。停止中に貯金へ回った分も含む） */
   contributed = 0;
-  /** ライフイベントのために投資から引き出した額（現金からの支払い＋強制売却） */
+  /** ライフイベントのために投資から引き出した額（移した貯金からの支払い＋強制売却） */
   withdrawn = 0;
 
   sellCount = 0;
@@ -70,6 +92,7 @@ export class Portfolio {
   private peak: number;
   private lastProcessedMonth = -1;
   private readonly eventsByMonth = new Map<number, LifeEvent>();
+  private readonly feeRate: Partial<Record<FundId, number>> = {};
 
   constructor(
     readonly market: Market,
@@ -79,15 +102,47 @@ export class Portfolio {
   ) {
     this.emergency = cfg.money.initialEmergencyFund;
     this.peak = market.prices[0];
+    this.funds = allocatedFunds(allocation, cfg);
+    for (const f of this.funds) {
+      this.holdings[f] = { units: 0, cash: 0, active: true, contributed: 0, withdrawn: 0, fee: 0 };
+      this.feeRate[f] = cfg.funds.find((x) => x.id === f)?.fee ?? 0;
+    }
     for (const e of events) this.eventsByMonth.set(e.month, e);
   }
 
-  price(month: number): number {
-    return this.market.prices[month];
+  holding(f: FundId): Holding {
+    const h = this.holdings[f];
+    if (!h) throw new Error(`ファンド ${f} は積立していません`);
+    return h;
   }
 
-  value(price: number): number {
-    return this.units * price + this.cash;
+  price(f: FundId, month: number): number {
+    return fundPrices(this.market, f)[month];
+  }
+
+  /** どれか1つでも積立中なら true */
+  get invested(): boolean {
+    return this.funds.some((f) => this.holding(f).active);
+  }
+
+  /** NISA の評価額（ファンドの時価のみ） */
+  nisaValue(month: number): number {
+    return this.funds.reduce((s, f) => s + this.holding(f).units * this.price(f, month), 0);
+  }
+
+  /** NISA から移した貯金の合計 */
+  get cash(): number {
+    return this.funds.reduce((s, f) => s + this.holding(f).cash, 0);
+  }
+
+  /** 投資用のお金の合計（NISA の時価＋移した貯金） */
+  value(month: number): number {
+    return this.nisaValue(month) + this.cash;
+  }
+
+  fundValue(f: FundId, month: number): number {
+    const h = this.holding(f);
+    return h.units * this.price(f, month) + h.cash;
   }
 
   /** 月初の処理：積立とライフイベント。同じ月を二度処理しない */
@@ -95,36 +150,63 @@ export class Portfolio {
     if (month <= this.lastProcessedMonth) throw new Error(`month ${month} は処理済みです`);
     if (month >= this.cfg.months) throw new Error(`month ${month} は期間外です`);
     this.lastProcessedMonth = month;
-    const p = this.price(month);
-    if (p > this.peak) this.peak = p;
+    const idx = this.market.prices[month];
+    if (idx > this.peak) this.peak = idx;
 
-    const { investPerMonth, savePerMonth } = this.allocation;
-    if (this.invested) this.units += investPerMonth / p;
-    else this.cash += investPerMonth;
-    this.contributed += investPerMonth;
-    this.emergency += savePerMonth;
+    for (const f of this.funds) {
+      const h = this.holding(f);
+      const p = this.price(f, month);
+      h.fee += (h.units * p * (this.feeRate[f] ?? 0)) / 12;
+      const inv = this.allocation.invest[f] ?? 0;
+      if (h.active) h.units += inv / p;
+      else h.cash += inv;
+      h.contributed += inv;
+      this.contributed += inv;
+    }
+    this.emergency += this.allocation.savePerMonth;
 
     const ev = this.eventsByMonth.get(month);
     if (!ev) return null;
-    const outcome = this.payLifeEvent(ev, p);
+    const outcome = this.payLifeEvent(ev, month);
     this.eventOutcomes.push(outcome);
     return outcome;
   }
 
-  private payLifeEvent(event: LifeEvent, price: number): LifeEventOutcome {
+  private payLifeEvent(event: LifeEvent, month: number): LifeEventOutcome {
     let remaining = event.cost;
     const fromEmergency = Math.min(remaining, Math.max(0, this.emergency));
     this.emergency -= fromEmergency;
     remaining -= fromEmergency;
 
-    const fromCash = Math.min(remaining, this.cash);
-    this.cash -= fromCash;
+    // 移した貯金から（ファンドごとの残高に比例して）
+    const cashTotal = this.cash;
+    const fromCash = Math.min(remaining, cashTotal);
+    if (fromCash > 0) {
+      for (const f of this.funds) {
+        const h = this.holding(f);
+        const take = (fromCash * h.cash) / cashTotal;
+        h.cash = Math.max(0, h.cash - take);
+        h.withdrawn += take;
+      }
+    }
     remaining -= fromCash;
 
-    const fundValue = this.units * price;
+    // それでも足りなければファンドを強制売却（時価に比例して）
+    const fundValue = this.nisaValue(month);
     const forcedSale = Math.min(remaining, fundValue);
+    const forcedByFund: Partial<Record<FundId, number>> = {};
     if (forcedSale > 0) {
-      this.units = fundValue - forcedSale <= 1e-6 ? 0 : this.units - forcedSale / price;
+      const all = forcedSale >= fundValue - 1e-6;
+      for (const f of this.funds) {
+        const h = this.holding(f);
+        const p = this.price(f, month);
+        const v = h.units * p;
+        if (v <= 0) continue;
+        const sell = all ? v : (forcedSale * v) / fundValue;
+        h.units = all ? 0 : h.units - sell / p;
+        h.withdrawn += sell;
+        forcedByFund[f] = sell;
+      }
       remaining -= forcedSale;
     }
 
@@ -134,63 +216,72 @@ export class Portfolio {
 
     return {
       event,
-      price,
-      drawdown: 1 - price / this.peak,
+      price: this.market.prices[month],
+      drawdown: 1 - this.market.prices[month] / this.peak,
       fromEmergency,
       fromCash,
       forcedSale,
+      forcedByFund,
       debt,
     };
   }
 
-  /** 全額売却。type は自分で売った（sell）か握力が尽きた（letGo）か */
-  sell(month: number, type: 'sell' | 'letGo'): TradeRecord | null {
-    if (!this.invested) return null;
-    const p = this.price(month);
-    const amount = this.units * p;
-    this.cash += amount;
-    this.units = 0;
-    this.invested = false;
-    if (type === 'sell') this.sellCount++;
-    else this.letGoCount++;
-    const rec: TradeRecord = { month, type, price: p, amount };
-    this.trades.push(rec);
-    return rec;
+  /** 売る：fund を省略すると積立中の全ファンド。売った分は貯金へ */
+  sell(month: number, type: 'sell' | 'letGo', fund?: FundId): TradeRecord[] {
+    const targets = (fund ? [fund] : this.funds).filter((f) => this.holdings[f]?.active);
+    const recs: TradeRecord[] = [];
+    for (const f of targets) {
+      const h = this.holding(f);
+      const p = this.price(f, month);
+      const amount = h.units * p;
+      h.cash += amount;
+      h.units = 0;
+      h.active = false;
+      if (type === 'sell') this.sellCount++;
+      recs.push({ month, type, fund: f, price: p, amount });
+    }
+    if (type === 'letGo' && recs.length > 0) this.letGoCount++;
+    this.trades.push(...recs);
+    return recs;
   }
 
-  /** 現金全額で買い戻す */
-  buy(month: number): TradeRecord | null {
-    if (this.invested) return null;
-    const p = this.price(month);
-    const amount = this.cash;
-    this.units += amount / p;
-    this.cash = 0;
-    this.invested = true;
-    this.buyCount++;
-    const rec: TradeRecord = { month, type: 'buy', price: p, amount };
-    this.trades.push(rec);
-    return rec;
+  /** 買い直す：fund を省略すると停止中の全ファンド。そのファンドから移した貯金の分で買う */
+  buy(month: number, fund?: FundId): TradeRecord[] {
+    const targets = (fund ? [fund] : this.funds).filter((f) => this.holdings[f] && !this.holding(f).active);
+    const recs: TradeRecord[] = [];
+    for (const f of targets) {
+      const h = this.holding(f);
+      const p = this.price(f, month);
+      const amount = h.cash;
+      h.units += amount / p;
+      h.cash = 0;
+      h.active = true;
+      this.buyCount++;
+      recs.push({ month, type: 'buy', fund: f, price: p, amount });
+    }
+    this.trades.push(...recs);
+    return recs;
   }
 
-  apply(action: PlayerAction): TradeRecord | null {
-    if (action.type === 'buy') return this.buy(action.month);
-    return this.sell(action.month, action.type);
-  }
-
-  snapshot(): PortfolioSnapshot {
-    return {
-      units: this.units,
-      cash: this.cash,
-      invested: this.invested,
-      emergency: this.emergency,
-      contributed: this.contributed,
-      withdrawn: this.withdrawn,
-    };
+  apply(action: PlayerAction): TradeRecord[] {
+    if (action.type === 'buy') return this.buy(action.month, action.fund);
+    if (action.type === 'letGo') return this.sell(action.month, 'letGo');
+    return this.sell(action.month, 'sell', action.fund);
   }
 }
 
+export interface FundSummary {
+  fund: FundId;
+  finalValue: number;
+  contributed: number;
+  withdrawn: number;
+  profit: number;
+  fee: number;
+  endedActive: boolean;
+}
+
 export interface SimSummary {
-  /** 最終評価額（ファンド＋売却中の現金） */
+  /** 最終評価額（NISA の時価＋NISA から移した貯金） */
   finalValue: number;
   /** 積立元本 */
   contributed: number;
@@ -204,11 +295,16 @@ export interface SimSummary {
   taxSaved: number;
   /** 強制売却の合計 */
   forcedSaleTotal: number;
+  /** 信託報酬の目安（合計） */
+  feeTotal: number;
+  /** 自分で売った回数（ファンドごとに数える） */
   sellCount: number;
   letGoCount: number;
   buyCount: number;
+  /** 最後に、どのファンドも積立中だった */
   endedInvested: boolean;
   emergencyFinal: number;
+  byFund: FundSummary[];
   trades: TradeRecord[];
   eventOutcomes: LifeEventOutcome[];
 }
@@ -235,9 +331,22 @@ export function runSimulation(
 }
 
 export function summarize(pf: Portfolio, cfg: Config = CONFIG): SimSummary {
-  const finalPrice = pf.market.prices[cfg.months];
-  const finalValue = pf.value(finalPrice);
+  const last = cfg.months;
+  const finalValue = pf.value(last);
   const profit = finalValue + pf.withdrawn - pf.contributed;
+  const byFund = pf.funds.map((f): FundSummary => {
+    const h = pf.holding(f);
+    const v = pf.fundValue(f, last);
+    return {
+      fund: f,
+      finalValue: v,
+      contributed: h.contributed,
+      withdrawn: h.withdrawn,
+      profit: v + h.withdrawn - h.contributed,
+      fee: h.fee,
+      endedActive: h.active,
+    };
+  });
   return {
     finalValue,
     contributed: pf.contributed,
@@ -246,11 +355,13 @@ export function summarize(pf: Portfolio, cfg: Config = CONFIG): SimSummary {
     profitRate: pf.contributed > 0 ? profit / pf.contributed : 0,
     taxSaved: Math.max(0, profit) * cfg.tax.rate,
     forcedSaleTotal: pf.eventOutcomes.reduce((s, o) => s + o.forcedSale, 0),
+    feeTotal: byFund.reduce((s, b) => s + b.fee, 0),
     sellCount: pf.sellCount,
     letGoCount: pf.letGoCount,
     buyCount: pf.buyCount,
-    endedInvested: pf.invested,
+    endedInvested: byFund.every((b) => b.endedActive),
     emergencyFinal: pf.emergency,
+    byFund,
     trades: pf.trades.slice(),
     eventOutcomes: pf.eventOutcomes.slice(),
   };
