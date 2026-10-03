@@ -173,6 +173,8 @@ async function share(res: GameResult): Promise<void> {
     `売却${res.actual.sellCount}回・手を離した${res.actual.letGoCount}回`,
     '※架空のシミュレーションです',
   ].join('\n');
+  const full = `${text}\n${url}`;
+  const btn = document.getElementById('r-share');
   try {
     if (navigator.share) {
       await navigator.share({ title: 'しがみつけ！', text, url });
@@ -182,10 +184,21 @@ async function share(res: GameResult): Promise<void> {
     if ((e as Error).name === 'AbortError') return;
   }
   try {
-    await navigator.clipboard.writeText(`${text}\n${url}`);
-    alert('結果をコピーしました');
+    await navigator.clipboard.writeText(full);
+    if (btn) btn.textContent = 'コピーしました！';
   } catch {
-    prompt('この文章をコピーしてシェアしてください', `${text}\n${url}`);
+    // コピーもできない環境では、選択済みのテキストを表示して手でコピーしてもらう
+    let box = document.getElementById('r-share-box') as HTMLTextAreaElement | null;
+    if (!box) {
+      box = document.createElement('textarea');
+      box.id = 'r-share-box';
+      box.className = 'share-box';
+      box.readOnly = true;
+      btn?.after(box);
+    }
+    box.value = full;
+    box.focus();
+    box.select();
   }
 }
 
