@@ -50,7 +50,7 @@ export function renderResult(
         <tr><th>その差額</th><td class="${signClass(res.diffFromHold)}">${manSigned(res.diffFromHold)}</td></tr>
         <tr class="sep"><th>売却回数</th><td>${a.sellCount}回</td></tr>
         <tr><th>手を離した回数</th><td>${a.letGoCount}回</td></tr>
-        <tr><th>買い戻した回数</th><td>${a.buyCount}回</td></tr>
+        <tr><th>NISAを再開した回数</th><td>${a.buyCount}回</td></tr>
         <tr><th>ライフイベントで強制的に売った額</th><td>${man(a.forcedSaleTotal)}</td></tr>
         <tr class="sep"><th>NISAで非課税になった額<br><span class="small">（課税口座なら払っていた税金の目安：利益×${(CONFIG.tax.rate * 100).toFixed(3)}%）</span></th><td>${man(a.taxSaved)}</td></tr>
         <tr><th>生活防衛資金の残り</th><td class="${a.emergencyFinal < 0 ? 'minus' : ''}">${man(a.emergencyFinal)}</td></tr>
@@ -60,7 +60,7 @@ export function renderResult(
     </div>
     <div class="card">
       <canvas id="result-chart"></canvas>
-      <div class="legend"><span style="color:#ff5a6e">▼売った</span><span style="color:#ffb347">▼手を離した</span><span style="color:#8fe3c4">▲買い戻した</span><span style="color:#c99bff">●強制売却</span></div>
+      <div class="legend"><span style="color:#ff5a6e">▼売った</span><span style="color:#ffb347">▼手を離した</span><span style="color:#8fe3c4">▲再開（買い直し）</span><span style="color:#c99bff">●強制売却</span></div>
     </div>
     <p class="small" style="text-align:center;margin:8px 0 0">シード：${res.seed}（同じシードなら同じ値動き）</p>
     <button class="btn primary" id="r-retry" type="button">もう一度（新しい相場）</button>

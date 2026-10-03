@@ -16,6 +16,9 @@ export class Hud {
     state: $('hud-state'),
     value: $('hud-value'),
     valueLabel: $('hud-value-label'),
+    principalLabel: $('hud-principal-label'),
+    emergencyLabel: $('hud-emergency-label'),
+    buyAmount: $('buy-amount'),
     hold: $('hud-hold'),
     holdValue: $('hud-hold-value'),
     holdDiff: $('hud-hold-diff'),
@@ -71,19 +74,31 @@ export class Hud {
     const e = this.els;
 
     this.set('date', e.date, monthLabel(Math.min(game.currentMonth, CONFIG.months - 1)));
-    this.set('state', e.state, game.invested ? '保有中' : '売却中（現金）', game.invested ? 'state-chip' : 'state-chip sold');
-    this.set('value', e.value, man(value));
-    // 売却中はファンドを持っていない。増えるのは毎月の積立分の現金だけ
-    this.set('valueLabel', e.valueLabel, game.invested ? '評価額' : '現金（ファンド0円）');
-    show(e.hold, !game.invested);
-    if (!game.invested) {
+    this.set('profit', e.profit, pctSigned(rate), signClass(profit));
+    if (game.invested) {
+      this.set('state', e.state, 'NISA保有中', 'state-chip');
+      this.set('valueLabel', e.valueLabel, '評価額');
+      this.set('value', e.value, man(value));
+      this.set('principalLabel', e.principalLabel, '元本');
+      this.set('principal', e.principal, man(pf.contributed));
+      this.set('emergencyLabel', e.emergencyLabel, '生活防衛資金');
+      this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
+    } else {
+      // 売却中＝NISAをやめて貯金に移した状態。毎月の積立額も貯金に回る
+      const savings = pf.emergency + pf.cash;
+      this.set('state', e.state, 'NISA停止中（貯金）', 'state-chip sold');
+      this.set('valueLabel', e.valueLabel, 'NISA');
+      this.set('value', e.value, '0円（売却済み）');
+      this.set('principalLabel', e.principalLabel, '貯金の合計');
+      this.set('principal', e.principal, man(savings), savings < 0 ? 'minus' : '');
+      this.set('emergencyLabel', e.emergencyLabel, 'うちNISAから移した分');
+      this.set('emergency', e.emergency, man(pf.cash), '');
+      this.set('buyAmount', e.buyAmount, `（移した${man(pf.cash)}で買い直す）`);
       const hold = game.holdValue;
       this.set('holdValue', e.holdValue, man(hold));
       this.set('holdDiff', e.holdDiff, `差 ${manSigned(value - hold)}`, signClass(value - hold));
     }
-    this.set('principal', e.principal, man(pf.contributed));
-    this.set('profit', e.profit, pctSigned(rate), signClass(profit));
-    this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
+    show(e.hold, !game.invested);
 
     const g = game.grip.value / CONFIG.grip.max;
     e.gripFill.style.width = `${Math.round(g * 100)}%`;
@@ -156,7 +171,7 @@ export class Hud {
     const bad = o.forcedSale > 0 || o.debt > 0;
     const rows: string[] = [];
     if (o.fromEmergency > 0) rows.push(`<div><span>生活防衛資金から</span><span>${man(o.fromEmergency)}</span></div>`);
-    if (o.fromCash > 0) rows.push(`<div><span>売却中の現金から</span><span>${man(o.fromCash)}</span></div>`);
+    if (o.fromCash > 0) rows.push(`<div><span>NISAから移した貯金から</span><span>${man(o.fromCash)}</span></div>`);
     if (o.forcedSale > 0)
       rows.push(`<div class="minus"><span>ファンドを強制売却</span><span>${man(o.forcedSale)}</span></div>`);
     if (o.debt > 0) rows.push(`<div class="minus"><span>足りずに借金</span><span>${man(o.debt)}</span></div>`);
@@ -168,7 +183,7 @@ export class Hud {
           ? `防衛資金が足りず、暴落中（高値から${pctSigned(-o.drawdown, 0)}）のファンドを売るはめに…`
           : '防衛資金が足りず、ファンドを売って払った。';
     } else if (o.debt > 0) comment = 'お金が足りない…！';
-    else if (o.fromCash > 0) comment = '売却中の現金で払った。';
+    else if (o.fromCash > 0) comment = 'NISAから移した貯金で払った。';
 
     m.innerHTML = `
       <div class="modal-card ${bad ? 'bad' : ''}">
@@ -195,10 +210,10 @@ export class Hud {
     return !this.els.modal.classList.contains('hidden');
   }
 
-  /** 売却・買い戻しの通知 */
+  /** 売却（NISA→貯金）・買い直し（NISA再開）の通知 */
   trade(type: 'sell' | 'letGo' | 'buy', amount: number): void {
-    if (type === 'sell') this.banner(`全部売った（${man(amount)}）。これからの積立は現金で貯まる`, 'bad', 2.6);
-    else if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却（${man(amount)}）。これからの積立は現金で貯まる`, 'bad', 3);
-    else this.banner(`買い戻した（${man(amount)}）`, 'good');
+    if (type === 'sell') this.banner(`NISAを全部売って貯金へ（${man(amount)}）。毎月の積立分も貯金に回る`, 'bad', 2.8);
+    else if (type === 'letGo') this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ`, 'bad', 3);
+    else this.banner(`NISA再開！ 移していた${man(amount)}で買い直した`, 'good');
   }
 }

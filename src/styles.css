@@ -733,3 +733,8 @@ button {
 .hud-hold b {
   font-weight: normal;
 }
+
+.buy-btn small {
+  display: block;
+  font-size: 12px;
+}
