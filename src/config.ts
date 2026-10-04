@@ -250,13 +250,31 @@ export const CONFIG = {
     /** このドローダウンを超えると握力が減り始める */
     drawdownThreshold: 0.1,
     /** 減る速さ（毎秒）= coef × ドローダウン × (steepFloor + 直近1か月の下落率) */
-    decayCoef: 400,
+    decayCoef: 150,
     /** 底で横ばいでも少しずつ減るようにする下駄 */
     steepFloor: 0.04,
-    /** 1タップで回復する量 */
-    tapRecover: 4,
     /** 平常時に毎秒回復する量 */
     regenPerSec: 30,
+  },
+
+  /** 暴落中に主人公へ飛んでくる「誘惑」（悲鳴コメント）。払いのけるのが暴落中の操作 */
+  temptations: {
+    /** 下落の段階（effects.commentTiers）ごとの、1秒あたりの出現数 */
+    spawnPerSec: [0.5, 0.9, 1.4],
+    /** 段階ごとの飛ぶ速さ（論理px/秒） */
+    speed: [55, 70, 90],
+    /** 段階ごとの、当たったときに減る握力 */
+    damage: [10, 14, 20],
+    /** 役に立つ言葉（緑）の割合 */
+    goodRatio: 0.18,
+    /** 役に立つ言葉が届いたときに回復する握力 */
+    goodHeal: 10,
+    /** 役に立つ言葉を払いのけてしまったときに減る握力 */
+    goodPopPenalty: 8,
+    /** 誘惑を払いのけたときに回復する握力 */
+    popHeal: 3,
+    /** 同時に飛んでいる数の上限 */
+    maxOnScreen: 9,
   },
 
   time: {
@@ -288,14 +306,8 @@ export const CONFIG = {
     shakeFrom: 0.2,
     /** 揺れの最大幅（論理px） */
     shakeMax: 4,
-    /** コメントの段階を切り替えるドローダウン */
+    /** 誘惑（悲鳴コメント）の段階を切り替えるドローダウン */
     commentTiers: [0.1, 0.2, 0.35],
-    /** 段階ごとのコメント出現数（毎秒） */
-    commentRatePerSec: [0.7, 1.6, 3.2],
-    /** 同時に流れるコメントの上限 */
-    commentMax: 14,
-    /** 段階ごとのコメントが画面を横切る時間（秒） */
-    commentDurationSec: [6, 4.5, 3],
     /** 祝福演出を出すのに必要な、直前の下落の深さ */
     celebrateAfterDrawdown: 0.1,
   },

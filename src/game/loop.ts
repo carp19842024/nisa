@@ -20,6 +20,7 @@ import {
 } from '../sim/portfolio';
 import { audio } from './audio';
 import { Grip } from './grip';
+import { Temptations, type Temptation } from './temptations';
 
 export type HeroPose = 'run' | 'runHappy' | 'shock' | 'cling' | 'clingCry' | 'fall' | 'walk' | 'victory';
 
@@ -41,6 +42,13 @@ export class Game {
   /** 同じ値動き・同じイベントで一度も売らなかった場合（売却中の比較表示用） */
   readonly holdPortfolio: Portfolio;
   readonly grip: Grip;
+  /** 暴落中に飛んでくる誘惑 */
+  readonly temptations = new Temptations();
+  /** 主人公の画面上の位置（誘惑が向かう先。描画側が毎フレーム更新する） */
+  heroScreenX = 128;
+  heroScreenY = 330;
+  /** 誘惑に当たった直後の演出用タイマー */
+  hitTimer = 0;
   readonly actions: PlayerAction[] = [];
 
   /** 経過時間（月・小数） */
@@ -135,6 +143,7 @@ export class Game {
     this.shockTimer = Math.max(0, this.shockTimer - dtSec);
     this.fallTimer = Math.max(0, this.fallTimer - dtSec);
     this.victoryTimer = Math.max(0, this.victoryTimer - dtSec);
+    this.hitTimer = Math.max(0, this.hitTimer - dtSec);
     if (this.paused || this.userPaused || this.finished) return;
 
     const tc = this.cfg.time;
@@ -209,10 +218,20 @@ export class Game {
     this.wasInDrawdown = inDd;
 
     if (this.invested) {
-      const empty = this.grip.update(dtSec, this.drawdown, this.monthDrop);
+      let empty = this.grip.update(dtSec, this.drawdown, this.monthDrop);
+      // 飛んでくる誘惑：当たると握力が大きく減り、役に立つ言葉が届くと回復する
+      const tc = this.cfg.temptations;
+      const step = this.temptations.update(dtSec, this.drawdown, this.heroScreenX, this.heroScreenY);
+      for (const t of step.hits) {
+        empty = this.grip.hit(tc.damage[t.tier]) || empty;
+        this.hitTimer = 0.35;
+        audio.play('crash');
+      }
+      for (const _ of step.arrivals) this.grip.heal(tc.goodHeal);
       if (empty) this.letGo();
     } else {
       this.grip.update(dtSec, 0, 0);
+      this.temptations.clear();
     }
   }
 
@@ -268,11 +287,25 @@ export class Game {
   // ---------------------------------------------------------------------------
   // 操作
 
-  /** 画面タップ：握力回復 */
-  tap(): void {
-    if (this.paused || this.userPaused || this.finished || !this.invested) return;
-    this.grip.tap();
+  /** 誘惑を払いのける。誘惑なら握力が少し回復、役に立つ言葉なら減る */
+  popTemptation(id: number): Temptation | null {
+    if (this.paused || this.userPaused || this.finished || !this.invested) return null;
+    return this.applyPop(this.temptations.pop(id));
+  }
+
+  /** いちばん主人公に近いものを払いのける（PC のスペースキー） */
+  popFrontTemptation(): Temptation | null {
+    if (this.paused || this.userPaused || this.finished || !this.invested) return null;
+    return this.applyPop(this.temptations.popFront());
+  }
+
+  private applyPop(t: Temptation | null): Temptation | null {
+    if (!t) return null;
+    const tc = this.cfg.temptations;
+    if (t.kind === 'bad') this.grip.heal(tc.popHeal);
+    else if (this.grip.hit(tc.goodPopPenalty)) this.letGo();
     audio.play('tap');
+    return t;
   }
 
   private record(type: PlayerAction['type'], recs: TradeRecord[], fund?: FundId, amount?: number): boolean {

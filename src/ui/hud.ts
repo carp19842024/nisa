@@ -1,9 +1,9 @@
 // 本編中の HTML 部分：HUD、コメント、バナー、ライフイベントのモーダル
 
 import { CONFIG, type FundConfig, type FundId } from '../config';
-import { COMMENTS, commentTier } from '../game/comments';
 import type { Game } from '../game/loop';
 import type { Overlay } from '../game/renderer';
+import type { Temptation } from '../game/temptations';
 import type { SpriteSet } from '../game/sprites';
 import type { LifeEventOutcome, TradeRecord } from '../sim/portfolio';
 import { $, show, spriteCanvas } from './dom';
@@ -33,7 +33,7 @@ export class Hud {
     modal: $('modal'),
   };
   private last: Record<string, string> = {};
-  private commentAcc = 0;
+  private readonly temptEls = new Map<number, HTMLButtonElement>();
   private bannerTimer = 0;
   private chips: { fund: FundId; el: HTMLElement; hold: HoldButton }[] = [];
 
@@ -142,7 +142,7 @@ export class Hud {
     this.set('grip', e.gripFill, '', g >= 0.5 ? '' : g >= 0.3 ? 'mid' : 'low');
     this.set('dd', e.dd, game.drawdown > 0.01 ? `高値${pctSigned(-game.drawdown, 0)}` : '');
 
-    // 前の高値ラベル・連打の指示
+    // 前の高値ラベル・誘惑を払う指示
     if (overlay.peakLabelY !== null) {
       e.peakLabel.style.top = `${overlay.peakLabelY - 14}px`;
       show(e.peakLabel, true);
@@ -150,18 +150,8 @@ export class Hud {
     const running = !game.paused && !game.userPaused && !game.finished;
     show(e.tapPrompt, running && game.invested && game.inDrawdown);
 
-    // 流れるコメント
-    e.comments.classList.toggle('paused', !running);
-    if (running) {
-      const tier = commentTier(game.drawdown, CONFIG.effects.commentTiers);
-      if (tier >= 0) {
-        this.commentAcc += CONFIG.effects.commentRatePerSec[tier] * dtSec;
-        while (this.commentAcc >= 1) {
-          this.commentAcc -= 1;
-          if (e.comments.childElementCount < CONFIG.effects.commentMax) this.spawnComment(tier);
-        }
-      } else this.commentAcc = 0;
-    }
+    // 飛んでくる誘惑（ロジックは game.temptations。ここでは画面のボタンを位置・状態に合わせるだけ）
+    this.syncTemptations(game.temptations.list);
 
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dtSec;
@@ -169,24 +159,35 @@ export class Hud {
     }
   }
 
-  private spawnComment(tier: number): void {
-    // 深い段階でも、たまに浅い段階のコメントを混ぜる
-    const t = Math.random() < 0.75 ? tier : Math.floor(Math.random() * (tier + 1));
-    const list = COMMENTS[t];
-    const span = document.createElement('span');
-    span.className = `comment t${t}`;
-    span.textContent = list[Math.floor(Math.random() * list.length)];
-    const dur = CONFIG.effects.commentDurationSec[tier] * (0.8 + Math.random() * 0.4);
-    span.style.top = `${120 + Math.random() * 340}px`;
-    span.style.fontSize = `${12 + t * 2 + Math.floor(Math.random() * 3)}px`;
-    span.style.animationDuration = `${dur}s`;
-    span.addEventListener('animationend', () => span.remove());
-    this.els.comments.appendChild(span);
+  private syncTemptations(list: readonly Temptation[]): void {
+    const box = this.els.comments;
+    const alive = new Set<number>();
+    for (const t of list) {
+      alive.add(t.id);
+      let el = this.temptEls.get(t.id);
+      if (!el) {
+        el = document.createElement('button');
+        el.type = 'button';
+        el.className = `tempt ${t.kind} t${t.tier}`;
+        el.dataset.id = String(t.id);
+        el.textContent = t.text;
+        box.appendChild(el);
+        this.temptEls.set(t.id, el);
+      }
+      el.style.transform = `translate(${Math.round(t.x)}px, ${Math.round(t.y)}px) translateY(-50%)`;
+      if (t.state !== 'fly' && !el.classList.contains(t.state)) el.classList.add(t.state);
+    }
+    for (const [id, el] of this.temptEls) {
+      if (!alive.has(id)) {
+        el.remove();
+        this.temptEls.delete(id);
+      }
+    }
   }
 
   clearComments(): void {
     this.els.comments.replaceChildren();
-    this.commentAcc = 0;
+    this.temptEls.clear();
   }
 
   banner(text: string, kind: 'normal' | 'good' | 'bad' = 'normal', sec = 2): void {
@@ -230,7 +231,7 @@ export class Hud {
       </div>`;
     m.querySelector('#ev-face')!.appendChild(spriteCanvas(this.sprites, bad ? 'sad' : 'shock', 1.5));
     const ok = m.querySelector<HTMLButtonElement>('#ev-ok')!;
-    // 連打中の誤タップで閉じないよう、少し待ってから押せるようにする
+    // 誘惑を払っている最中の誤タップで閉じないよう、少し待ってから押せるようにする
     setTimeout(() => (ok.disabled = false), 700);
     ok.addEventListener('click', () => {
       show(m, false);

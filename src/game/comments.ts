@@ -58,3 +58,15 @@ export function commentTier(drawdown: number, tiers: readonly number[]): number 
   });
   return tier;
 }
+
+/** 暴落中に混じる「役に立つ言葉」。届くと握力が回復し、払いのけると減る */
+export const GOOD_WORDS: readonly string[] = [
+  '長期だし放っておこう',
+  '積立は続けるだけ',
+  '売らなきゃ損は確定しない',
+  '見ないのが一番',
+  '安く買えてるってこと',
+  '防衛資金があるから大丈夫',
+  '20年後に笑おう',
+  '暴落は何度もあった',
+];

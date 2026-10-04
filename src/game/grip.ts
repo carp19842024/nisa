@@ -1,4 +1,4 @@
-// 握力。ドローダウンが深く、下落が急なほど速く減る。タップで回復する。
+// 握力。暴落中はじわじわ減り、飛んでくる誘惑に当たると大きく減る。誘惑を払いのけると少し回復する。
 
 import { CONFIG, type Config } from '../config';
 
@@ -29,8 +29,14 @@ export class Grip {
     return false;
   }
 
-  tap(): void {
-    this.value = Math.min(this.cfg.grip.max, this.value + this.cfg.grip.tapRecover);
+  /** 減らす。尽きたら true */
+  hit(amount: number): boolean {
+    this.value = Math.max(0, this.value - amount);
+    return this.value <= 0;
+  }
+
+  heal(amount: number): void {
+    this.value = Math.min(this.cfg.grip.max, this.value + amount);
   }
 
   reset(): void {

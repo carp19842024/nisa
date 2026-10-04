@@ -283,24 +283,42 @@ function setPaused(p: boolean): void {
   show(pauseOverlay, p);
 }
 
-// 画面のどこをタップしても握力回復（ボタン・モーダルの上は除く）
+// 飛んでくる誘惑を払いのける：タップでも、指でなぞる（スワイプ）でもよい
+let swiping = false;
+
+function popAt(clientX: number, clientY: number): void {
+  if (!isRunning() || !game) return;
+  const el = (document.elementFromPoint(clientX, clientY) as HTMLElement | null)?.closest<HTMLElement>('.tempt');
+  if (!el) return;
+  const t = game.popTemptation(Number(el.dataset.id));
+  if (!t) return;
+  // 誘惑なら白い光、役に立つ言葉を払ってしまったら灰色
+  renderer.burst(t.x + 20, t.y, 8, t.kind === 'bad' ? ['#ffffff', '#ffe066'] : ['#888888', '#555555']);
+}
+
 stage.addEventListener('pointerdown', (e) => {
   if (!isRunning() || !game) return;
   const target = e.target as HTMLElement;
-  if (target.closest('button, .modal, .screen')) return;
+  if (target.closest('.modal, .screen, #controls, .icon-btn')) return;
   e.preventDefault();
-  game.tap();
-  const rect = stage.getBoundingClientRect();
-  const sx = ((e.clientX - rect.left) / rect.width) * VIEW_W;
-  const sy = ((e.clientY - rect.top) / rect.height) * VIEW_H;
-  renderer.tapFx(sx, sy);
+  swiping = true;
+  popAt(e.clientX, e.clientY);
 });
+stage.addEventListener('pointermove', (e) => {
+  if (swiping) popAt(e.clientX, e.clientY);
+});
+for (const type of ['pointerup', 'pointercancel', 'pointerleave'] as const) {
+  stage.addEventListener(type, () => (swiping = false));
+}
 
 window.addEventListener('keydown', (e) => {
   if (screen !== 'game' || !game) return;
   if (e.code === 'Space') {
     e.preventDefault();
-    if (!e.repeat) game.tap();
+    if (!e.repeat) {
+      const t = game.popFrontTemptation();
+      if (t) renderer.burst(t.x + 20, t.y, 8, t.kind === 'bad' ? ['#ffffff', '#ffe066'] : ['#888888', '#555555']);
+    }
   } else if (e.code === 'KeyS') {
     if (!e.repeat && isRunning() && game.invested) sellAllHold.press();
   } else if (DIGIT_KEYS.includes(e.code)) {
@@ -379,6 +397,9 @@ function frame(now: number): void {
   if (screen === 'game' && game) {
     game.update(dtMs);
     const overlay = renderer.renderGame(game, dt);
+    // 誘惑が向かう先（主人公の体の中心）
+    game.heroScreenX = overlay.heroX;
+    game.heroScreenY = overlay.heroCenterY;
     hud.update(game, overlay, dt);
   } else {
     attractTime += dt;

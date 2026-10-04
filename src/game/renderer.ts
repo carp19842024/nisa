@@ -73,9 +73,11 @@ function clamp01(v: number): number {
 export interface Overlay {
   /** 前の高値ラインのラベル位置（null なら非表示） */
   peakLabelY: number | null;
-  /** 主人公の画面上の位置 */
+  /** 主人公の画面上の位置（足元、またはぶら下がっている線の位置） */
   heroX: number;
   heroY: number;
+  /** 主人公の体の中心（誘惑が向かう先） */
+  heroCenterY: number;
 }
 
 export class Renderer {
@@ -432,7 +434,14 @@ export class Renderer {
     this.updateParticles(dtSec);
     ctx.restore();
     this.drawRedEdge(dd, game.elapsed);
-    return { peakLabelY: peakY, heroX: hero.x, heroY: hero.y };
+    // 誘惑に当たった瞬間は画面が赤く光る
+    if (game.hitTimer > 0) {
+      ctx.fillStyle = `rgba(255,40,60,${(0.35 * game.hitTimer) / 0.35})`;
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
+    const h = this.sprites?.run.frameH ?? 80;
+    const hanging = game.pose === 'cling' || game.pose === 'clingCry';
+    return { peakLabelY: peakY, heroX: hero.x, heroY: hero.y, heroCenterY: hanging ? hero.y + h / 2 : hero.y - h / 2 };
   }
 
   /** タイトル画面の背景：なだらかな右肩上がりを走り続ける */
