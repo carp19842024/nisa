@@ -996,10 +996,15 @@ button {
   pointer-events: none;
 }
 
-.tempt.hit {
-  animation: tempt-hit 0.3s steps(3) forwards;
+.tempt.passed {
+  opacity: 0.35;
   pointer-events: none;
 }
+
+.tempt.bad.passed {
+  animation: tempt-hit 0.25s steps(2);
+}
+
 
 .tempt.fade {
   opacity: 0;
@@ -1016,10 +1021,9 @@ button {
 }
 
 @keyframes tempt-hit {
-  50% {
+  0% {
+    opacity: 1;
     background: #ff2040;
-  }
-  to {
-    opacity: 0;
+    border-color: #fff;
   }
 }

@@ -430,6 +430,11 @@ export class Renderer {
       prices: f.prices,
     }));
     const peakY = this.drawChart(game.history, game.t, game.price, game.peak, dd, fundLines);
+    // 暴落中は主人公の位置に縦のラインを引く（コメントがここを越えると握力が減る）
+    if (game.invested && game.inDrawdown && game.fallTimer <= 0) {
+      ctx.fillStyle = `rgba(255,90,110,${0.35 + 0.2 * Math.abs(Math.sin(game.elapsed * 4))})`;
+      for (let y = 112; y < GROUND_Y; y += 8) ctx.fillRect(HERO_X - 1, y, 2, 4);
+    }
     const hero = this.drawHero(game);
     this.updateParticles(dtSec);
     ctx.restore();

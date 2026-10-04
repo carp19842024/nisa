@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { CONFIG } from '../../src/config';
 import { Temptations } from '../../src/game/temptations';
 
 /** 決まった値を順に返す乱数 */
@@ -7,64 +6,76 @@ const seq = (...vals: number[]) => {
   let i = 0;
   return () => vals[i++ % vals.length];
 };
+const HERO_X = 128;
+
+/** 1つ出てくるまで少しずつ時間を進める */
+function spawnOne(tm: Temptations, drawdown = 0.25) {
+  for (let i = 0; i < 1000 && tm.flying().length === 0; i++) tm.update(0.01, drawdown, HERO_X);
+  return tm.flying()[0];
+}
 
 describe('誘惑', () => {
   it('下落が浅いうちは出てこない', () => {
     const tm = new Temptations(seq(0.5));
-    for (let i = 0; i < 100; i++) tm.update(0.1, 0.05, 128, 300);
+    for (let i = 0; i < 100; i++) tm.update(0.1, 0.05, HERO_X);
     expect(tm.list).toHaveLength(0);
   });
 
-  it('下落中は出てきて、主人公に向かって飛び、届くと当たる', () => {
+  it('右から左へまっすぐ流れ、主人公のラインを越えた瞬間に当たる', () => {
     const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5)); // 0.9 → 誘惑（役に立つ言葉ではない）
-    tm.update(1 / CONFIG.temptations.spawnPerSec[1] + 0.01, 0.25, 128, 300);
+    const t = spawnOne(tm);
     expect(tm.flying()).toHaveLength(1);
-    const t = tm.flying()[0];
+    expect(t.x).toBeGreaterThan(300);
+    const y0 = t.y;
     expect(t.kind).toBe('bad');
-    expect(t.tier).toBe(1);
     let hits = 0;
-    for (let i = 0; i < 200 && hits === 0; i++) {
-      const step = tm.update(0.05, 0.25, 128, 300);
-      hits += step.hits.filter((h) => h.id === t.id).length;
+    for (let i = 0; i < 400; i++) {
+      const before = t.x;
+      const step = tm.update(0.02, 0.25, HERO_X);
+      if (step.hits.some((h) => h.id === t.id)) {
+        hits++;
+        expect(before).toBeGreaterThan(HERO_X);
+        expect(t.x).toBeLessThanOrEqual(HERO_X);
+      }
     }
     expect(hits).toBe(1);
-    // 当たるときには主人公の高さに来ている
-    expect(t.y).toBeCloseTo(300, 0);
+    // 高さは変わらない（主人公を追いかけない）
+    expect(t.y).toBe(y0);
+    // 越えたあとも流れ去るまでは残り、払えない
+    expect(t.state === 'passed' || !tm.list.includes(t)).toBe(true);
+    expect(tm.pop(t.id)).toBeNull();
   });
 
   it('払いのけたものは当たらない', () => {
     const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5));
-    tm.update(2, 0.25, 128, 300);
-    const t = tm.flying()[0];
+    const t = spawnOne(tm);
     expect(tm.pop(t.id)?.id).toBe(t.id);
     expect(tm.pop(t.id)).toBeNull();
     let hits = 0;
-    for (let i = 0; i < 200; i++) hits += tm.update(0.05, 0.05, 128, 300).hits.length;
+    for (let i = 0; i < 300; i++) hits += tm.update(0.02, 0.05, HERO_X).hits.length;
     expect(hits).toBe(0);
   });
 
-  it('役に立つ言葉は、届くと arrivals として返る', () => {
+  it('役に立つ言葉は、ラインを越えると arrivals として返る', () => {
     const tm = new Temptations(seq(0.01, 0.5, 0.5, 0.5)); // 0.01 < goodRatio → 役に立つ言葉
-    tm.update(2, 0.25, 128, 300);
-    expect(tm.flying()[0].kind).toBe('good');
+    expect(spawnOne(tm).kind).toBe('good');
     let arrivals = 0;
-    for (let i = 0; i < 200 && arrivals === 0; i++) arrivals += tm.update(0.05, 0.25, 128, 300).arrivals.length;
+    for (let i = 0; i < 300 && arrivals === 0; i++) arrivals += tm.update(0.02, 0.25, HERO_X).arrivals.length;
     expect(arrivals).toBe(1);
   });
 
-  it('popFront はいちばん主人公に近いものを払いのける', () => {
+  it('popFront はいちばん主人公のラインに近いものを払いのける', () => {
     const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5));
-    tm.update(2, 0.25, 128, 300);
-    tm.update(1, 0.25, 128, 300);
-    tm.update(1.2, 0.25, 128, 300);
+    spawnOne(tm);
+    for (let i = 0; i < 80; i++) tm.update(0.01, 0.25, HERO_X);
     const front = [...tm.flying()].sort((a, b) => a.x - b.x)[0];
     expect(tm.popFront()?.id).toBe(front.id);
   });
 
-  it('下落が落ち着くと、飛んでいるものは消えていく', () => {
+  it('下落が落ち着くと、まだ越えていないものは消えていく', () => {
     const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5));
-    tm.update(2, 0.25, 128, 300);
-    tm.update(0.1, 0.02, 128, 300);
+    spawnOne(tm);
+    tm.update(0.1, 0.02, HERO_X);
     expect(tm.flying()).toHaveLength(0);
   });
 });

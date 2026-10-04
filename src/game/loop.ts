@@ -221,7 +221,7 @@ export class Game {
       let empty = this.grip.update(dtSec, this.drawdown, this.monthDrop);
       // 飛んでくる誘惑：当たると握力が大きく減り、役に立つ言葉が届くと回復する
       const tc = this.cfg.temptations;
-      const step = this.temptations.update(dtSec, this.drawdown, this.heroScreenX, this.heroScreenY);
+      const step = this.temptations.update(dtSec, this.drawdown, this.heroScreenX);
       for (const t of step.hits) {
         empty = this.grip.hit(tc.damage[t.tier]) || empty;
         this.hitTimer = 0.35;

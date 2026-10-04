@@ -1,6 +1,7 @@
-// 暴落中に主人公へ飛んでくる「誘惑」（悲鳴コメント）。描画には依存しないロジックだけを持つ。
-// - 誘惑（bad）は主人公に当たると握力を大きく減らす。払いのけると少し回復
-// - 役に立つ言葉（good）は届くと握力が回復する。払いのけてしまうと減る
+// 暴落中に右から左へ流れてくる「誘惑」（悲鳴コメント）。描画には依存しないロジックだけを持つ。
+// コメントはまっすぐ横に流れ、主人公の位置（縦のライン）を越えた瞬間に効果が出る。
+// - 誘惑（bad）がラインを越えると握力が減る。越える前に払いのけると少し回復
+// - 役に立つ言葉（good）がラインを越えると握力が回復する。払いのけてしまうと減る
 
 import { CONFIG, type Config } from '../config';
 import { COMMENTS, GOOD_WORDS, commentTier } from './comments';
@@ -13,28 +14,30 @@ export interface Temptation {
   kind: TemptationKind;
   /** 下落の段階（0〜2） */
   tier: number;
+  /** 左端の位置 */
   x: number;
   y: number;
   speed: number;
-  state: 'fly' | 'popped' | 'hit' | 'fade';
+  /** fly = 流れている（払える）／passed = ラインを越えて流れ去る途中／popped = 払いのけた／fade = 下落が落ち着いて消える */
+  state: 'fly' | 'passed' | 'popped' | 'fade';
   /** popped / hit / fade になってからの秒数（演出用） */
   age: number;
 }
 
 export interface TemptationStep {
-  /** 主人公に当たった誘惑 */
+  /** 主人公のラインを越えた誘惑 */
   hits: Temptation[];
-  /** 主人公に届いた役に立つ言葉 */
+  /** 主人公のラインを越えた役に立つ言葉 */
   arrivals: Temptation[];
 }
 
 /** 画面の右端の外から飛んでくる */
 const SPAWN_X = 372;
-const SPAWN_Y_MIN = 130;
-const SPAWN_Y_MAX = 470;
-/** 主人公からこの距離まで来たら当たり */
-const HIT_DISTANCE = 18;
-/** 当たり・払いのけ後に消えるまでの秒数 */
+const SPAWN_Y_MIN = 125;
+const SPAWN_Y_MAX = 480;
+/** 画面の左端からこれだけ外に出たら消す（長い文言でも抜けきる位置） */
+const GONE_X = -320;
+/** 払いのけ・消える演出の秒数 */
 const LINGER_SEC = 0.35;
 
 export class Temptations {
@@ -47,7 +50,8 @@ export class Temptations {
     private readonly cfg: Config = CONFIG,
   ) {}
 
-  update(dtSec: number, drawdown: number, heroX: number, heroY: number): TemptationStep {
+  /** heroX：主人公の縦のライン（これを越えると効果が出る） */
+  update(dtSec: number, drawdown: number, heroX: number): TemptationStep {
     const tc = this.cfg.temptations;
     const tier = commentTier(drawdown, this.cfg.effects.commentTiers);
     const step: TemptationStep = { hits: [], arrivals: [] };
@@ -62,27 +66,26 @@ export class Temptations {
     } else this.acc = 0;
 
     for (const t of this.list) {
-      if (t.state !== 'fly') {
+      if (t.state === 'popped' || t.state === 'fade') {
         t.age += dtSec;
         continue;
       }
-      // 下落が落ち着いたら、飛んでいるものは消えていく
-      if (tier < 0) {
+      // 下落が落ち着いたら、まだ越えていないものは消えていく
+      if (tier < 0 && t.state === 'fly') {
         t.state = 'fade';
         continue;
       }
-      // 主人公に向かってまっすぐ飛ぶ（横は一定の速さ、縦は着くまでに主人公の高さへ寄せる）
-      const remain = Math.max(1, t.x - heroX);
-      const dx = Math.min(remain, t.speed * dtSec);
-      t.y += (heroY - t.y) * (dx / remain);
-      t.x -= dx;
-      if (t.x - heroX <= HIT_DISTANCE) {
-        t.state = 'hit';
+      // まっすぐ右から左へ流れる。主人公のラインを越えた瞬間に効果
+      t.x -= t.speed * dtSec;
+      if (t.state === 'fly' && t.x <= heroX) {
+        t.state = 'passed';
         if (t.kind === 'bad') step.hits.push(t);
         else step.arrivals.push(t);
       }
     }
-    this.list = this.list.filter((t) => t.state === 'fly' || t.age < LINGER_SEC);
+    this.list = this.list.filter((t) =>
+      t.state === 'fly' || t.state === 'passed' ? t.x > GONE_X : t.age < LINGER_SEC,
+    );
     return step;
   }
 
