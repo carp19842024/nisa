@@ -16,22 +16,31 @@ export interface SaveData {
   bgmOff?: boolean;
 }
 
+/**
+ * localStorage が使えない環境（埋め込み表示・プライベートモードなど）でも、
+ * 開いている間はハイスコアなどが残るよう、メモリにも同じ内容を持っておく
+ */
+let memory: SaveData = {};
+
 export function load(): SaveData {
   try {
     const raw = localStorage.getItem(CONFIG.storageKey);
-    if (!raw) return {};
-    const data = JSON.parse(raw) as unknown;
-    return data && typeof data === 'object' ? (data as SaveData) : {};
+    if (raw) {
+      const data = JSON.parse(raw) as unknown;
+      if (data && typeof data === 'object') memory = data as SaveData;
+    }
   } catch {
-    return {};
+    /* 読めなければメモリの内容を使う */
   }
+  return { ...memory };
 }
 
 export function save(data: SaveData): void {
+  memory = { ...data };
   try {
     localStorage.setItem(CONFIG.storageKey, JSON.stringify(data));
   } catch {
-    /* 保存できなくてもゲームは続ける */
+    /* 保存できなくてもゲームは続ける（この画面を開いている間はメモリに残る） */
   }
 }
 
