@@ -293,12 +293,6 @@ export class Game {
     return this.applyPop(this.temptations.pop(id));
   }
 
-  /** いちばん主人公に近いものを払いのける（PC のスペースキー） */
-  popFrontTemptation(): Temptation | null {
-    if (this.paused || this.userPaused || this.finished || !this.invested) return null;
-    return this.applyPop(this.temptations.popFront());
-  }
-
   private applyPop(t: Temptation | null): Temptation | null {
     if (!t) return null;
     const tc = this.cfg.temptations;

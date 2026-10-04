@@ -318,11 +318,8 @@ for (const type of ['pointerup', 'pointercancel', 'pointerleave'] as const) {
 window.addEventListener('keydown', (e) => {
   if (screen !== 'game' || !game) return;
   if (e.code === 'Space') {
+    // スペースキーは使わない（画面のスクロールや、選択中のボタンが押されるのを防ぐだけ）
     e.preventDefault();
-    if (!e.repeat) {
-      const t = game.popFrontTemptation();
-      if (t) renderer.burst(t.x + 20, t.y, 8, t.kind === 'bad' ? ['#ffffff', '#ffe066'] : ['#888888', '#555555']);
-    }
   } else if (e.code === 'KeyS') {
     if (!e.repeat && isRunning() && game.invested) sellAllHold.press();
   } else if (DIGIT_KEYS.includes(e.code)) {

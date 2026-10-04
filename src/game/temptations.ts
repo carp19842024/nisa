@@ -118,12 +118,6 @@ export class Temptations {
     return t;
   }
 
-  /** いちばん主人公に近いものを払いのける（PC のスペースキー） */
-  popFront(): Temptation | null {
-    const f = this.flying().sort((a, b) => a.x - b.x)[0];
-    return f ? this.pop(f.id) : null;
-  }
-
   clear(): void {
     this.list = [];
     this.acc = 0;

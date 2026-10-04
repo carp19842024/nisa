@@ -64,14 +64,6 @@ describe('誘惑', () => {
     expect(arrivals).toBe(1);
   });
 
-  it('popFront はいちばん主人公のラインに近いものを払いのける', () => {
-    const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5));
-    spawnOne(tm);
-    for (let i = 0; i < 80; i++) tm.update(0.01, 0.25, HERO_X);
-    const front = [...tm.flying()].sort((a, b) => a.x - b.x)[0];
-    expect(tm.popFront()?.id).toBe(front.id);
-  });
-
   it('下落が落ち着くと、まだ越えていないものは消えていく', () => {
     const tm = new Temptations(seq(0.9, 0.5, 0.5, 0.5));
     spawnOne(tm);
