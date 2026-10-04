@@ -878,13 +878,39 @@ button {
   }
 }
 
-.title-sub-btns {
+.bgm-switch {
   display: flex;
+  align-items: center;
   gap: 8px;
+  margin-top: 10px;
 }
 
-.title-sub-btns .btn {
+.bgm-switch-label {
+  font-size: 15px;
+  color: var(--muted);
+  min-width: 44px;
+}
+
+.bgm-opt {
   flex: 1;
+  padding: 9px 6px;
+  font-size: 15px;
+  color: var(--muted);
+  background: transparent;
+  border: 3px solid var(--line);
+  border-radius: 6px;
+}
+
+.bgm-opt.selected {
+  color: #10241c;
+  background: var(--mint);
+  border-color: #000;
+  box-shadow: 0 3px 0 #000;
+}
+
+.bgm-opt[data-on='0'].selected {
+  color: var(--text);
+  background: #5a5f80;
 }
 
 .bgm-btn {

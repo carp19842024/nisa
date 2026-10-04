@@ -5,7 +5,7 @@ import { escapeHtml, man } from './format';
 
 export function renderTitle(
   el: HTMLElement,
-  handlers: { onStart(): void; onDisclaimer(): void; bgmOn(): boolean; onToggleBgm(): void },
+  handlers: { onStart(): void; onDisclaimer(): void; bgmOn(): boolean; onSetBgm(on: boolean): void },
 ): void {
   const hs = load().highScore;
   el.className = 'screen clear';
@@ -20,21 +20,31 @@ export function renderTitle(
         : 'ハイスコア：まだありません'
     }</p>
     <button class="btn primary" id="title-start" type="button">はじめる</button>
-    <div class="title-sub-btns">
-      <button class="btn ghost" id="title-disclaimer" type="button">注意事項</button>
-      <button class="btn ghost" id="title-bgm" type="button" aria-pressed="true"></button>
+    <button class="btn ghost" id="title-disclaimer" type="button">注意事項</button>
+    <div class="bgm-switch" role="group" aria-label="BGM">
+      <span class="bgm-switch-label">BGM</span>
+      <button type="button" class="bgm-opt" data-on="1">ON</button>
+      <button type="button" class="bgm-opt" data-on="0">OFF</button>
     </div>
   `;
-  const bgmBtn = el.querySelector<HTMLButtonElement>('#title-bgm')!;
-  const label = () => {
-    bgmBtn.textContent = `BGM：${handlers.bgmOn() ? 'ON' : 'OFF'}`;
-    bgmBtn.setAttribute('aria-pressed', String(handlers.bgmOn()));
+  // 選んでいるほうを塗りつぶし＋✓で示す
+  const opts = Array.from(el.querySelectorAll<HTMLButtonElement>('.bgm-opt'));
+  const refresh = () => {
+    const on = handlers.bgmOn();
+    for (const b of opts) {
+      const selected = (b.dataset.on === '1') === on;
+      b.classList.toggle('selected', selected);
+      b.setAttribute('aria-pressed', String(selected));
+      b.textContent = `${selected ? '✓ ' : ''}${b.dataset.on === '1' ? 'ON' : 'OFF'}`;
+    }
   };
-  bgmBtn.addEventListener('click', () => {
-    handlers.onToggleBgm();
-    label();
-  });
-  label();
+  for (const b of opts) {
+    b.addEventListener('click', () => {
+      handlers.onSetBgm(b.dataset.on === '1');
+      refresh();
+    });
+  }
+  refresh();
   el.querySelector('#title-start')!.addEventListener('click', handlers.onStart);
   el.querySelector('#title-disclaimer')!.addEventListener('click', handlers.onDisclaimer);
 }

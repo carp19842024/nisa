@@ -55,10 +55,14 @@ let allocation: Allocation = {
 };
 const bgm = new Bgm(load().bgmOn ?? CONFIG.audio.defaultOn);
 
-function toggleBgm(): void {
-  bgm.setEnabled(!bgm.enabled);
-  setBgmOn(bgm.enabled);
+function setBgm(on: boolean): void {
+  bgm.setEnabled(on);
+  setBgmOn(on);
   updateBgmButtons();
+}
+
+function toggleBgm(): void {
+  setBgm(!bgm.enabled);
 }
 
 function updateBgmButtons(): void {
@@ -115,7 +119,7 @@ function go(next: Screen): void {
         void spritesReady.then(() => (load().seenDisclaimer ? go('setup') : go('disclaimer')));
       },
       bgmOn: () => bgm.enabled,
-      onToggleBgm: toggleBgm,
+      onSetBgm: setBgm,
       onDisclaimer: () => {
         renderDisclaimer(screens.disclaimer, {
           firstTime: false,
