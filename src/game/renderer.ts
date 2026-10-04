@@ -90,7 +90,8 @@ export class Renderer {
 
   constructor(
     readonly canvas: HTMLCanvasElement,
-    public sprites: SpriteSet,
+    /** 画像の読み込みが終わるまでは null（その間は主人公を描かない） */
+    public sprites: SpriteSet | null,
   ) {
     canvas.width = VIEW_W;
     canvas.height = VIEW_H;
@@ -301,6 +302,7 @@ export class Renderer {
   private drawHero(game: Game): { x: number; y: number } {
     const ctx = this.ctx;
     const pose = game.pose;
+    if (!this.sprites) return { x: HERO_X, y: this.yFor(game.price) };
     const sprite = this.sprites[POSE_SPRITE[pose]];
     const lineY = this.yFor(game.price);
     if (pose === 'fall' && this.lastPose !== 'fall') this.fallFromY = lineY;
@@ -446,8 +448,10 @@ export class Renderer {
     this.drawBackground(0, t * PX_PER_MONTH, time);
     this.drawGround(t * PX_PER_MONTH);
     this.drawChart(prices, t, p, p, 0);
-    const sprite = this.sprites.run;
-    drawSprite(ctx, sprite, spriteFrame(sprite, time), HERO_X, this.yFor(p) + 2, 'bottom');
+    if (this.sprites) {
+      const sprite = this.sprites.run;
+      drawSprite(ctx, sprite, spriteFrame(sprite, time), HERO_X, this.yFor(p) + 2, 'bottom');
+    }
     this.updateParticles(dtSec);
   }
 }

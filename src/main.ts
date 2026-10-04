@@ -33,9 +33,16 @@ const screens: Record<Exclude<Screen, 'game'>, HTMLElement> = {
 };
 const pauseOverlay = $('pause-overlay');
 
+// 主人公の画像。読み込みが終わるまで、ゲーム画面には主人公を描かない（プレースホルダーが一瞬見えないように）。
+// HTML 画面用の sprites は、万一の読み込み前に備えてプレースホルダーで初期化しておく
 let sprites: SpriteSet = placeholderSprites();
-const renderer = new Renderer(canvas, sprites);
+const renderer = new Renderer(canvas, null);
 const hud = new Hud(sprites);
+const spritesReady = loadSprites().then((s) => {
+  sprites = s;
+  renderer.sprites = s;
+  hud.setSprites(s);
+});
 
 /** URL の ?seed=123 で値動きを固定できる（デバッグ用） */
 const urlSeed = parseSeed(new URLSearchParams(location.search).get('seed'));
@@ -105,8 +112,8 @@ function go(next: Screen): void {
     renderTitle(screens.title, {
       onStart: () => {
         setupSeed = null;
-        if (load().seenDisclaimer) go('setup');
-        else go('disclaimer');
+        // 画像の読み込みが終わってから先へ進む（ふつうはタイトルを見ている間に終わっている）
+        void spritesReady.then(() => (load().seenDisclaimer ? go('setup') : go('disclaimer')));
       },
       bgmOn: () => bgm.enabled,
       onToggleBgm: toggleBgm,
@@ -384,11 +391,6 @@ function frame(now: number): void {
 
 go('title');
 requestAnimationFrame(frame);
-loadSprites().then((s) => {
-  sprites = s;
-  renderer.sprites = s;
-  hud.setSprites(s);
-});
 
 // デバッグ用（コンソールから結果を確認できるように）
 Object.assign(window as unknown as Record<string, unknown>, {
