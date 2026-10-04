@@ -200,7 +200,7 @@ function startGame(seed: number): void {
 async function share(res: GameResult): Promise<void> {
   const url = `${location.origin}${location.pathname}?seed=${res.seed}`;
   const text = [
-    `【しがみつけ！】称号「${res.title.name}」`,
+    `【しがみつけ！つみたて！】称号「${res.title.name}」`,
     `最終評価額 ${man(res.actual.finalValue)}（元本 ${man(res.actual.contributed)}）`,
     `ずっと持ち続けていたら ${man(res.hold.finalValue)}（差 ${manSigned(res.diffFromHold)}）`,
     `売却${res.actual.sellCount}回・手を離した${res.actual.letGoCount}回`,
@@ -210,7 +210,7 @@ async function share(res: GameResult): Promise<void> {
   const btn = document.getElementById('r-share');
   try {
     if (navigator.share) {
-      await navigator.share({ title: 'しがみつけ！', text, url });
+      await navigator.share({ title: 'しがみつけ！つみたて！', text, url });
       return;
     }
   } catch (e) {

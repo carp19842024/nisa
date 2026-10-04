@@ -10,7 +10,7 @@ export function renderTitle(
   const hs = load().highScore;
   el.className = 'screen clear';
   el.innerHTML = `
-    <h1>しがみつけ！</h1>
+    <h1>しがみつけ！<br><span class="title-sub">つみたて！</span></h1>
     <p class="subtitle">〜 暴落チキンレース 〜</p>
     <div class="spacer"></div>
     <div class="spacer"></div>
