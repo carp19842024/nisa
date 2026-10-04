@@ -933,3 +933,39 @@ button {
   opacity: 0.45;
   text-decoration: line-through;
 }
+
+/* 再開（買い直し）の画面 */
+.modal-card.buyback {
+  border-color: var(--fund, var(--mint));
+}
+
+.amount-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 8px 0 6px;
+}
+
+.amount-row b {
+  min-width: 92px;
+  font-size: 18px;
+  font-weight: normal;
+}
+
+.amount-row button,
+.amount-quick button {
+  white-space: nowrap;
+  padding: 6px 5px;
+  font-size: 12px;
+  border: 2px solid #000;
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: 0 2px 0 #000;
+}
+
+.amount-quick {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}

@@ -49,37 +49,69 @@ describe('一度も売らない場合', () => {
   });
 });
 
-describe('ファンドを選んで売る・買い直す', () => {
+describe('ファンドを選んで売る・再開する', () => {
   const market = fixedMarket((m) => (m < 10 ? 10_000 : 5_000), { gold: (m) => (m < 10 ? 10_000 : 12_000) });
   const two: Allocation = { invest: { zenbu: 30_000, gold: 10_000 }, savePerMonth: 10_000 };
 
-  it('売ったファンドだけが貯金に移り、以降そのファンドの積立分も貯金に回る', () => {
+  it('売った代金は生活防衛資金に入り、以降そのファンドの積立分も生活防衛資金に残る', () => {
     const pf = new Portfolio(market, two, []);
     for (let m = 0; m < 5; m++) pf.startMonth(m);
+    const before = pf.emergency;
     const recs = pf.sell(4, 'sell', 'zenbu');
     expect(recs).toHaveLength(1);
     expect(recs[0].amount).toBeCloseTo(150_000, 6);
+    expect(pf.emergency).toBeCloseTo(before + 150_000, 6);
     expect(pf.holding('zenbu').active).toBe(false);
     expect(pf.holding('gold').active).toBe(true);
     expect(pf.invested).toBe(true);
+    const afterSell = pf.emergency;
     for (let m = 5; m < 12; m++) pf.startMonth(m);
-    expect(pf.holding('zenbu').cash).toBeCloseTo(150_000 + 7 * 30_000, 6);
-    expect(pf.holding('gold').units).toBeCloseTo(12 * 10_000 / 10_000 - 2 * 10_000 / 10_000 + 2 * 10_000 / 12_000, 6);
+    // 7か月 ×（貯金1万＋止めたぜんぶ入りの3万）
+    expect(pf.emergency).toBeCloseTo(afterSell + 7 * 40_000, 6);
+    expect(pf.holding('zenbu').units).toBe(0);
+    // 元本は実際に NISA に入れた分だけ（止めている間の3万は入らない）
+    expect(pf.contributed).toBe(5 * 30_000 + 12 * 10_000);
+    expect(pf.withdrawn).toBeCloseTo(150_000, 6);
   });
 
-  it('買い直しは、そのファンドから移した分だけで買う', () => {
+  it('再開すると、生活防衛資金から指定額を移して買い直す（残高まで）', () => {
     const pf = new Portfolio(market, two, []);
     for (let m = 0; m < 12; m++) {
       pf.startMonth(m);
       if (m === 4) pf.sell(4, 'sell', 'zenbu');
     }
-    const cash = pf.holding('zenbu').cash;
-    const recs = pf.buy(11, 'zenbu');
-    expect(recs[0].amount).toBeCloseTo(cash, 6);
-    expect(pf.holding('zenbu').units).toBeCloseTo(cash / 5_000, 6);
-    expect(pf.cash).toBe(0);
-    expect(pf.sellCount).toBe(1);
-    expect(pf.buyCount).toBe(1);
+    const em = pf.emergency;
+    const recs = pf.buy(11, 'zenbu', 200_000);
+    expect(recs[0].amount).toBe(200_000);
+    expect(pf.holding('zenbu').units).toBeCloseTo(200_000 / 5_000, 6);
+    expect(pf.holding('zenbu').active).toBe(true);
+    expect(pf.emergency).toBeCloseTo(em - 200_000, 6);
+    // 残高より多くは買えない
+    pf.sell(11, 'sell', 'zenbu');
+    const recs2 = pf.buy(11, 'zenbu', 99_999_999);
+    expect(recs2[0].amount).toBeCloseTo(em, 6);
+    expect(pf.emergency).toBeCloseTo(0, 6);
+  });
+
+  it('0円で再開すると、積立だけ再開する', () => {
+    const pf = new Portfolio(market, two, []);
+    pf.startMonth(0);
+    pf.sell(0, 'sell', 'zenbu');
+    const em = pf.emergency;
+    pf.buy(0, 'zenbu', 0);
+    expect(pf.emergency).toBe(em);
+    pf.startMonth(1);
+    expect(pf.holding('zenbu').units).toBeCloseTo(30_000 / 10_000, 6);
+  });
+
+  it('損益 = NISA の評価額 + NISA から出したお金 − NISA に入れたお金', () => {
+    const actions = [
+      { month: 4, type: 'sell' as const, fund: 'zenbu' as const },
+      { month: 11, type: 'buy' as const, fund: 'zenbu' as const, amount: 100_000 },
+    ];
+    const r = runSimulation(market, two, [], actions);
+    expect(r.profit).toBeCloseTo(r.finalValue + r.withdrawn - r.contributed, 6);
+    expect(r.totalAssets).toBeCloseTo(r.finalValue + r.emergencyFinal, 6);
   });
 
   it('ファンドを省略して売ると、積立中の全ファンドが対象。握力切れも全部売る', () => {
@@ -143,15 +175,15 @@ describe('ライフイベント', () => {
     expect(out.forcedByFund.gold).toBeCloseTo(40_000, 6);
   });
 
-  it('売却中は移した貯金から払い、それでも足りなければ借金になる', () => {
+  it('売った代金も生活防衛資金なので出費に使われ、それでも足りなければ借金になる', () => {
     const ev: LifeEvent[] = [{ month: 2, id: 'job', name: '無収入', cost: 600_000 }];
     const pf = new Portfolio(fixedMarket(() => 10_000), zenbu(50_000, 0), ev);
     pf.startMonth(0);
     pf.sell(0, 'sell');
     pf.startMonth(1);
     const out = pf.startMonth(2)!;
-    expect(out.fromEmergency).toBe(300_000);
-    expect(out.fromCash).toBeCloseTo(150_000, 6);
+    // 防衛資金30万＋売却5万＋止めている間の積立分5万×2
+    expect(out.fromEmergency).toBeCloseTo(450_000, 6);
     expect(out.forcedSale).toBe(0);
     expect(out.debt).toBeCloseTo(150_000, 6);
     expect(pf.emergency).toBeCloseTo(-150_000, 6);
@@ -184,7 +216,7 @@ describe('ずっと持ち続けていたら', () => {
     expect(res.hold).toEqual(runSimulation(market, a, events, []));
     expect(res.hold.sellCount).toBe(0);
     expect(res.actual).toEqual(runSimulation(market, a, events, actions));
-    expect(res.diffFromHold).toBeCloseTo(res.actual.finalValue - res.hold.finalValue, 6);
+    expect(res.diffFromHold).toBeCloseTo(res.actual.totalAssets - res.hold.totalAssets, 6);
     expect(res.hold.eventOutcomes[0].price).toBe(market.prices[60]);
     expect(res.actual.eventOutcomes[0].price).toBe(market.prices[60]);
   });

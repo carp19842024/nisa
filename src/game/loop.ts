@@ -142,20 +142,22 @@ export class Game {
     this.speed += (target - this.speed) * Math.min(1, tc.speedLerpPerSec * dtSec);
     this.t += ((dtSec * 1000) / tc.msPerMonth) * this.speed;
 
+    // 時間が一気に進んでも、途中の月を飛ばさずに1か月ずつ処理する（イベントが起きたらそこで止まる）
+    while (this.nextMonth <= Math.floor(this.t) && this.nextMonth < this.cfg.months) {
+      const m = this.nextMonth;
+      if (this.processMonth(m)) {
+        this.t = m;
+        this.updateMetrics(dtSec);
+        return;
+      }
+    }
+
     if (this.t >= this.cfg.months) {
       this.t = this.cfg.months;
       this.updateMetrics(dtSec);
       this.finished = true;
       this.cb.onEnd(this.actions.slice());
       return;
-    }
-
-    while (this.nextMonth <= Math.floor(this.t) && this.nextMonth < this.cfg.months) {
-      const m = this.nextMonth;
-      if (this.processMonth(m)) {
-        this.t = m;
-        break;
-      }
     }
     this.updateMetrics(dtSec);
   }
@@ -268,9 +270,12 @@ export class Game {
     audio.play('tap');
   }
 
-  private record(type: PlayerAction['type'], recs: TradeRecord[], fund?: FundId): boolean {
+  private record(type: PlayerAction['type'], recs: TradeRecord[], fund?: FundId, amount?: number): boolean {
     if (recs.length === 0) return false;
-    this.actions.push(fund ? { month: recs[0].month, type, fund } : { month: recs[0].month, type });
+    const action: PlayerAction = { month: recs[0].month, type };
+    if (fund) action.fund = fund;
+    if (amount) action.amount = amount;
+    this.actions.push(action);
     this.reanchor(this.t);
     this.cb.onTrade(type, recs);
     return true;
@@ -294,12 +299,12 @@ export class Game {
     audio.play('sell');
   }
 
-  /** 「再開」：そのファンドから移した分で買い直す。fund を省略すると停止中の全部 */
-  buyBack(fund?: FundId): void {
+  /** 「再開」：積立を再開し、生活防衛資金から amount 円を移して買い直す。fund を省略すると停止中の全部（買い直しなし） */
+  buyBack(fund?: FundId, amount = 0): void {
     if (this.paused || this.finished) return;
     const wasInvested = this.invested;
-    const recs = this.portfolio.buy(this.currentMonth, fund);
-    if (!this.record('buy', recs, fund)) return;
+    const recs = this.portfolio.buy(this.currentMonth, fund, amount);
+    if (!this.record('buy', recs, fund, fund ? recs[0]?.amount : undefined)) return;
     if (!wasInvested) this.grip.reset();
     audio.play('buy');
   }
@@ -317,17 +322,23 @@ export class Game {
     return this.portfolio.nisaValue(this.valuationMonth);
   }
 
-  /** 投資用のお金の合計（NISA の時価＋NISA から移した貯金） */
-  get value(): number {
-    return this.portfolio.value(this.valuationMonth);
+  /** 資産の合計（NISA の時価＋生活防衛資金） */
+  get totalAssets(): number {
+    return this.portfolio.totalAssets(this.valuationMonth);
   }
 
   fundValue(f: FundId): number {
     return this.portfolio.holding(f).units * this.portfolio.price(f, this.valuationMonth);
   }
 
-  /** ずっと持ち続けていたらの評価額 */
-  get holdValue(): number {
-    return this.holdPortfolio.value(this.valuationMonth);
+  /** ずっと持ち続けていたらの資産の合計 */
+  get holdTotalAssets(): number {
+    return this.holdPortfolio.totalAssets(this.valuationMonth);
+  }
+
+  /** そのファンドを最後に売ったときの金額（再開時の買い直し額の目安） */
+  lastSaleAmount(f: FundId): number {
+    const t = [...this.portfolio.trades].reverse().find((r) => r.fund === f && r.type !== 'buy');
+    return t?.amount ?? 0;
   }
 }

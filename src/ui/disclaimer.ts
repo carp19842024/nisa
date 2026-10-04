@@ -13,7 +13,7 @@ export function renderDisclaimer(el: HTMLElement, opts: { firstTime: boolean; on
     </div>
     <div class="card small">
       <p>遊び方：平常時は見ているだけでOK。暴落が来たら画面を<b>連打</b>して握力を保とう。握力が尽きると手を離して全部売ってしまいます。</p>
-      <p>画面下のファンドのボタンを1秒長押しすると、そのファンドを全部売って貯金に移します（以降、そのファンドの積立分も貯金へ）。停止中のボタンを押すと、移した分で買い直して再開します。</p>
+      <p>画面下のファンドのボタンを1秒長押しすると、そのファンドを全部売ります。代金は生活防衛資金に入り、以降そのファンドの積立分も積み立てずに生活防衛資金に残ります。停止中のボタンを押すと積立を再開でき、そのとき生活防衛資金から好きな額を移して買い直せます。</p>
     </div>
     <div class="spacer"></div>
     <button class="btn primary" id="disc-ok" type="button">${opts.firstTime ? '理解しました' : 'OK'}</button>

@@ -1,8 +1,10 @@
 // 積立・売却・買い直し・強制売却（ファンドごと）。
 // 同じ入力（値動き・設定・イベント・操作ログ）からは必ず同じ結果になる。
 //
-// 売る ＝ そのファンドを全部売って貯金に移す（以降、そのファンドの積立分も貯金に回る）。
-// 買い直す ＝ そのファンドから移した貯金の分で、そのファンドを買い直して積立を再開する。
+// 現実の口座に近い形にしている：
+// 売る ＝ そのファンドを全部売って、代金は銀行口座（＝生活防衛資金）に入る。
+//         以降、そのファンドの毎月の積立分も積立されずに口座（生活防衛資金）に残る。
+// 再開 ＝ そのファンドの積立を再開する。そのとき生活防衛資金から好きな額を移して買い直せる（0円でもよい）。
 
 import { CONFIG, type Config, type FundId } from '../config';
 import type { LifeEvent } from './events';
@@ -28,13 +30,15 @@ export type ActionType = 'sell' | 'letGo' | 'buy';
 
 /**
  * プレイヤーの操作ログ1件。month の月初処理の後に実行される。
- * fund を省略すると、売るときは積立中の全ファンド、買い直すときは停止中の全ファンドが対象。
+ * fund を省略すると、売るときは積立中の全ファンド、再開するときは停止中の全ファンドが対象。
  * letGo（握力切れ）は常に全ファンド。
+ * amount は再開（buy）のときに生活防衛資金から移して買い直す額（fund を指定したときだけ有効）。
  */
 export interface PlayerAction {
   month: number;
   type: ActionType;
   fund?: FundId;
+  amount?: number;
 }
 
 export interface TradeRecord {
@@ -52,8 +56,6 @@ export interface LifeEventOutcome {
   /** 市場全体の直近高値からの下落率 */
   drawdown: number;
   fromEmergency: number;
-  /** NISAから移した貯金から払った額 */
-  fromCash: number;
   /** ファンドを強制的に売った額（合計） */
   forcedSale: number;
   /** ファンドごとの強制売却額 */
@@ -64,11 +66,11 @@ export interface LifeEventOutcome {
 
 export interface Holding {
   units: number;
-  /** このファンドを売って貯金に移した分（＋停止中の積立分） */
-  cash: number;
   /** 積立中か（false = 売って停止中） */
   active: boolean;
+  /** このファンドに入れたお金（積立＋再開時の買い直し） */
   contributed: number;
+  /** このファンドから出したお金（売却＋強制売却） */
   withdrawn: number;
   /** 信託報酬の目安（累計） */
   fee: number;
@@ -78,9 +80,9 @@ export class Portfolio {
   readonly holdings: Partial<Record<FundId, Holding>> = {};
   readonly funds: FundId[];
   emergency: number;
-  /** 積立元本（積み立てた額の合計。停止中に貯金へ回った分も含む） */
+  /** 積立元本＝NISA に入れたお金の合計（毎月の積立＋再開時の買い直し） */
   contributed = 0;
-  /** ライフイベントのために投資から引き出した額（移した貯金からの支払い＋強制売却） */
+  /** NISA から出したお金の合計（売却＋握力切れ＋強制売却）。出したお金は生活防衛資金に入る */
   withdrawn = 0;
 
   sellCount = 0;
@@ -104,7 +106,7 @@ export class Portfolio {
     this.peak = market.prices[0];
     this.funds = allocatedFunds(allocation, cfg);
     for (const f of this.funds) {
-      this.holdings[f] = { units: 0, cash: 0, active: true, contributed: 0, withdrawn: 0, fee: 0 };
+      this.holdings[f] = { units: 0, active: true, contributed: 0, withdrawn: 0, fee: 0 };
       this.feeRate[f] = cfg.funds.find((x) => x.id === f)?.fee ?? 0;
     }
     for (const e of events) this.eventsByMonth.set(e.month, e);
@@ -130,19 +132,13 @@ export class Portfolio {
     return this.funds.reduce((s, f) => s + this.holding(f).units * this.price(f, month), 0);
   }
 
-  /** NISA から移した貯金の合計 */
-  get cash(): number {
-    return this.funds.reduce((s, f) => s + this.holding(f).cash, 0);
-  }
-
-  /** 投資用のお金の合計（NISA の時価＋移した貯金） */
-  value(month: number): number {
-    return this.nisaValue(month) + this.cash;
+  /** 資産の合計（NISA の時価＋生活防衛資金） */
+  totalAssets(month: number): number {
+    return this.nisaValue(month) + this.emergency;
   }
 
   fundValue(f: FundId, month: number): number {
-    const h = this.holding(f);
-    return h.units * this.price(f, month) + h.cash;
+    return this.holding(f).units * this.price(f, month);
   }
 
   /** 月初の処理：積立とライフイベント。同じ月を二度処理しない */
@@ -158,10 +154,14 @@ export class Portfolio {
       const p = this.price(f, month);
       h.fee += (h.units * p * (this.feeRate[f] ?? 0)) / 12;
       const inv = this.allocation.invest[f] ?? 0;
-      if (h.active) h.units += inv / p;
-      else h.cash += inv;
-      h.contributed += inv;
-      this.contributed += inv;
+      if (h.active) {
+        h.units += inv / p;
+        h.contributed += inv;
+        this.contributed += inv;
+      } else {
+        // 積立を止めているファンドの分は、積み立てずに口座（生活防衛資金）に残る
+        this.emergency += inv;
+      }
     }
     this.emergency += this.allocation.savePerMonth;
 
@@ -177,19 +177,6 @@ export class Portfolio {
     const fromEmergency = Math.min(remaining, Math.max(0, this.emergency));
     this.emergency -= fromEmergency;
     remaining -= fromEmergency;
-
-    // 移した貯金から（ファンドごとの残高に比例して）
-    const cashTotal = this.cash;
-    const fromCash = Math.min(remaining, cashTotal);
-    if (fromCash > 0) {
-      for (const f of this.funds) {
-        const h = this.holding(f);
-        const take = (fromCash * h.cash) / cashTotal;
-        h.cash = Math.max(0, h.cash - take);
-        h.withdrawn += take;
-      }
-    }
-    remaining -= fromCash;
 
     // それでも足りなければファンドを強制売却（時価に比例して）
     const fundValue = this.nisaValue(month);
@@ -212,21 +199,20 @@ export class Portfolio {
 
     const debt = remaining;
     this.emergency -= debt;
-    this.withdrawn += fromCash + forcedSale;
+    this.withdrawn += forcedSale;
 
     return {
       event,
       price: this.market.prices[month],
       drawdown: 1 - this.market.prices[month] / this.peak,
       fromEmergency,
-      fromCash,
       forcedSale,
       forcedByFund,
       debt,
     };
   }
 
-  /** 売る：fund を省略すると積立中の全ファンド。売った分は貯金へ */
+  /** 売る：fund を省略すると積立中の全ファンド。代金は生活防衛資金へ */
   sell(month: number, type: 'sell' | 'letGo', fund?: FundId): TradeRecord[] {
     const targets = (fund ? [fund] : this.funds).filter((f) => this.holdings[f]?.active);
     const recs: TradeRecord[] = [];
@@ -234,7 +220,9 @@ export class Portfolio {
       const h = this.holding(f);
       const p = this.price(f, month);
       const amount = h.units * p;
-      h.cash += amount;
+      this.emergency += amount;
+      h.withdrawn += amount;
+      this.withdrawn += amount;
       h.units = 0;
       h.active = false;
       if (type === 'sell') this.sellCount++;
@@ -245,26 +233,31 @@ export class Portfolio {
     return recs;
   }
 
-  /** 買い直す：fund を省略すると停止中の全ファンド。そのファンドから移した貯金の分で買う */
-  buy(month: number, fund?: FundId): TradeRecord[] {
+  /**
+   * 再開：積立を再開し、生活防衛資金から amount 円を移して買い直す（生活防衛資金の残高まで）。
+   * fund を省略すると停止中の全ファンドの積立を再開する（買い直しはしない）
+   */
+  buy(month: number, fund?: FundId, amount = 0): TradeRecord[] {
     const targets = (fund ? [fund] : this.funds).filter((f) => this.holdings[f] && !this.holding(f).active);
     const recs: TradeRecord[] = [];
     for (const f of targets) {
       const h = this.holding(f);
       const p = this.price(f, month);
-      const amount = h.cash;
-      h.units += amount / p;
-      h.cash = 0;
+      const amt = fund ? Math.max(0, Math.min(amount, this.emergency)) : 0;
+      h.units += amt / p;
+      h.contributed += amt;
+      this.contributed += amt;
+      this.emergency -= amt;
       h.active = true;
       this.buyCount++;
-      recs.push({ month, type: 'buy', fund: f, price: p, amount });
+      recs.push({ month, type: 'buy', fund: f, price: p, amount: amt });
     }
     this.trades.push(...recs);
     return recs;
   }
 
   apply(action: PlayerAction): TradeRecord[] {
-    if (action.type === 'buy') return this.buy(action.month, action.fund);
+    if (action.type === 'buy') return this.buy(action.month, action.fund, action.amount ?? 0);
     if (action.type === 'letGo') return this.sell(action.month, 'letGo');
     return this.sell(action.month, 'sell', action.fund);
   }
@@ -281,13 +274,15 @@ export interface FundSummary {
 }
 
 export interface SimSummary {
-  /** 最終評価額（NISA の時価＋NISA から移した貯金） */
+  /** 最終評価額（NISA の時価） */
   finalValue: number;
-  /** 積立元本 */
+  /** 最終的な資産（NISA の時価＋生活防衛資金）。「ずっと持ち続けていたら」との比較やハイスコアに使う */
+  totalAssets: number;
+  /** 積立元本（NISA に入れたお金） */
   contributed: number;
-  /** ライフイベントのために投資から引き出した額 */
+  /** NISA から出したお金（売却・強制売却） */
   withdrawn: number;
-  /** 損益 = 最終評価額 + 引き出し額 − 積立元本 */
+  /** 損益 = 最終評価額 + NISA から出したお金 − NISA に入れたお金 */
   profit: number;
   /** 損益率（積立元本比） */
   profitRate: number;
@@ -332,7 +327,7 @@ export function runSimulation(
 
 export function summarize(pf: Portfolio, cfg: Config = CONFIG): SimSummary {
   const last = cfg.months;
-  const finalValue = pf.value(last);
+  const finalValue = pf.nisaValue(last);
   const profit = finalValue + pf.withdrawn - pf.contributed;
   const byFund = pf.funds.map((f): FundSummary => {
     const h = pf.holding(f);
@@ -349,6 +344,7 @@ export function summarize(pf: Portfolio, cfg: Config = CONFIG): SimSummary {
   });
   return {
     finalValue,
+    totalAssets: finalValue + pf.emergency,
     contributed: pf.contributed,
     withdrawn: pf.withdrawn,
     profit,

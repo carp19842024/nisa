@@ -72,7 +72,7 @@ export function renderSetup(
     <div class="card advice"><span id="s-face"></span><p id="s-advice"></p></div>
     <div class="card small">
       <p>ファンドはすべて架空です。期間は20年（240か月）、生活防衛資金の初期額は${man(CONFIG.money.initialEmergencyFund, 0)}。</p>
-      <p>ゲーム中はファンドごとに売れます（売った分は貯金へ）。出費は生活防衛資金から払い、足りない分はファンドを売って払います。</p>
+      <p>ゲーム中はファンドごとに売れます。売った代金と、止めている間の積立分は生活防衛資金に入ります。出費は生活防衛資金から払い、足りない分はファンドを売って払います。</p>
       ${opts.seedLabel ? `<p>シード：${opts.seedLabel}</p>` : ''}
     </div>
     <button class="btn primary" id="s-start" type="button">20年の積立をはじめる</button>

@@ -44,7 +44,7 @@ export function save(data: SaveData): void {
   }
 }
 
-/** ハイスコア（最終評価額）を更新したら true */
+/** ハイスコア（最終的な資産＝NISA＋生活防衛資金）を更新したら true */
 export function submitScore(score: NonNullable<SaveData['highScore']>): boolean {
   const data = load();
   if (data.highScore && data.highScore.finalValue >= score.finalValue) return false;

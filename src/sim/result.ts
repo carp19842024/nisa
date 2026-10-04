@@ -14,7 +14,7 @@ export interface GameResult {
   hold: SimSummary;
   /** 同じ積立額をすべて「ぜんぶ入りファンド」にして、一度も売らなかった場合 */
   zenbuOnly: SimSummary;
-  /** 実際 − ずっと持ち続けていたら */
+  /** 実際 − ずっと持ち続けていたら（資産の合計＝NISA＋生活防衛資金で比べる） */
   diffFromHold: number;
   title: Title;
 }
@@ -41,7 +41,7 @@ export function evaluateGame(
     actual,
     hold,
     zenbuOnly,
-    diffFromHold: actual.finalValue - hold.finalValue,
-    title: determineTitle(actual, market, { allocation, zenbuOnlyFinal: zenbuOnly.finalValue }, cfg),
+    diffFromHold: actual.totalAssets - hold.totalAssets,
+    title: determineTitle(actual, market, { allocation, zenbuOnlyTotal: zenbuOnly.totalAssets }, cfg),
   };
 }

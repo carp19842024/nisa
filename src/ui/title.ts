@@ -16,7 +16,7 @@ export function renderTitle(
     <div class="spacer"></div>
     <p class="highscore">${
       hs
-        ? `ハイスコア：<b>${man(hs.finalValue)}</b><br><span class="small">称号「${escapeHtml(hs.title)}」</span>`
+        ? `ハイスコア（資産の合計）：<b>${man(hs.finalValue)}</b><br><span class="small">称号「${escapeHtml(hs.title)}」</span>`
         : 'ハイスコア：まだありません'
     }</p>
     <button class="btn primary" id="title-start" type="button">はじめる</button>

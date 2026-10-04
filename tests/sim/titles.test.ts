@@ -16,7 +16,7 @@ const alloc = zenbu(40_000, 10_000);
 
 const title = (actions: PlayerAction[], events: LifeEvent[] = [], a: Allocation = alloc) => {
   const zenbuOnly = runSimulation(market, zenbu(40_000, a.savePerMonth), events, []);
-  return determineTitle(runSimulation(market, a, events, actions), market, { allocation: a, zenbuOnlyFinal: zenbuOnly.finalValue }).id;
+  return determineTitle(runSimulation(market, a, events, actions), market, { allocation: a, zenbuOnlyTotal: zenbuOnly.totalAssets }).id;
 };
 
 describe('称号', () => {

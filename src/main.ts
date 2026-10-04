@@ -166,7 +166,7 @@ function startGame(seed: number): void {
         const res = evaluateGame(g.market, g.allocation, g.events, actions);
         lastResult = res;
         const isHigh = submitScore({
-          finalValue: res.actual.finalValue,
+          finalValue: res.actual.totalAssets,
           profit: res.actual.profit,
           title: res.title.name,
           seed: res.seed,
@@ -189,7 +189,22 @@ function startGame(seed: number): void {
     game,
     (f) => game?.sell(f),
     (f) => {
-      if (isRunning()) game?.buyBack(f);
+      // 停止中のファンドを押した：ゲームを止めて、生活防衛資金からいくら移すかを選ぶ
+      const g = game;
+      if (!g || !isRunning()) return;
+      resetHolds();
+      g.paused = true;
+      hud.showBuyBack(
+        g,
+        f,
+        (amount) => {
+          g.paused = false;
+          g.buyBack(f, amount);
+        },
+        () => {
+          g.paused = false;
+        },
+      );
     },
   );
   game.start();
@@ -201,8 +216,8 @@ async function share(res: GameResult): Promise<void> {
   const url = `${location.origin}${location.pathname}?seed=${res.seed}`;
   const text = [
     `【つみたて！】称号「${res.title.name}」`,
-    `最終評価額 ${man(res.actual.finalValue)}（元本 ${man(res.actual.contributed)}）`,
-    `ずっと持ち続けていたら ${man(res.hold.finalValue)}（差 ${manSigned(res.diffFromHold)}）`,
+    `最終的な資産 ${man(res.actual.totalAssets)}（NISA ${man(res.actual.finalValue)}＋生活防衛資金 ${man(res.actual.emergencyFinal)}）`,
+    `ずっと持ち続けていたら ${man(res.hold.totalAssets)}（差 ${manSigned(res.diffFromHold)}）`,
     `売却${res.actual.sellCount}回・手を離した${res.actual.letGoCount}回`,
     '※架空のシミュレーションです',
   ].join('\n');

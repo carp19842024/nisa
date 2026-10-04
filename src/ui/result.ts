@@ -46,30 +46,31 @@ export function renderResult(
     ${isHighScore ? '<p class="highscore"><b>ハイスコア更新！</b></p>' : ''}
     <div class="card">
       <table class="result-table">
-        <tr class="big"><th>最終評価額</th><td>${man(a.finalValue)}</td></tr>
-        <tr><th>積立元本</th><td>${man(a.contributed)}</td></tr>
-        ${a.withdrawn > 0 ? `<tr><th>生活費として引き出した額</th><td>${man(a.withdrawn)}</td></tr>` : ''}
-        <tr><th>損益</th><td class="${signClass(a.profit)}">${manSigned(a.profit)}（${pctSigned(a.profitRate)}）</td></tr>
-        <tr class="sep big"><th>ずっと持ち続けていたら</th><td>${man(res.hold.finalValue)}</td></tr>
+        <tr class="big"><th>最終的な資産<br><span class="small">（NISA＋生活防衛資金）</span></th><td>${man(a.totalAssets)}</td></tr>
+        <tr><th>うち NISA の評価額</th><td>${man(a.finalValue)}</td></tr>
+        <tr><th>うち 生活防衛資金</th><td class="${a.emergencyFinal < 0 ? 'minus' : ''}">${man(a.emergencyFinal)}</td></tr>
+        <tr class="sep big"><th>ずっと持ち続けていたら<br><span class="small">（NISA＋生活防衛資金）</span></th><td>${man(res.hold.totalAssets)}</td></tr>
         <tr><th>その差額</th><td class="${signClass(res.diffFromHold)}">${manSigned(res.diffFromHold)}</td></tr>
         ${
           res.allocation.invest.zenbu === undefined || Object.keys(res.allocation.invest).length > 1
-            ? `<tr><th>ぜんぶ入りファンドだけを<br>持ち続けていたら</th><td>${man(res.zenbuOnly.finalValue)}</td></tr>`
+            ? `<tr><th>ぜんぶ入りファンドだけを<br>持ち続けていたら</th><td>${man(res.zenbuOnly.totalAssets)}</td></tr>`
             : ''
         }
+        <tr class="sep"><th>NISA に入れたお金（積立元本）</th><td>${man(a.contributed)}</td></tr>
+        ${a.withdrawn > 0 ? `<tr><th>NISA から出したお金<br><span class="small">（売却・強制売却）</span></th><td>${man(a.withdrawn)}</td></tr>` : ''}
+        <tr><th>NISA の損益</th><td class="${signClass(a.profit)}">${manSigned(a.profit)}（${pctSigned(a.profitRate)}）</td></tr>
         <tr class="sep"><th>売却回数（ファンドごと）</th><td>${a.sellCount}回</td></tr>
         <tr><th>手を離した回数</th><td>${a.letGoCount}回</td></tr>
         <tr><th>NISAを再開した回数</th><td>${a.buyCount}回</td></tr>
         <tr><th>ライフイベントで強制的に売った額</th><td>${man(a.forcedSaleTotal)}</td></tr>
         <tr class="sep"><th>NISAで非課税になった額<br><span class="small">（課税口座なら払っていた税金の目安：利益×${(CONFIG.tax.rate * 100).toFixed(3)}%）</span></th><td>${man(a.taxSaved)}</td></tr>
         <tr><th>手数料（信託報酬）の目安</th><td>${man(a.feeTotal)}</td></tr>
-        <tr><th>生活防衛資金の残り</th><td class="${a.emergencyFinal < 0 ? 'minus' : ''}">${man(a.emergencyFinal)}</td></tr>
       </table>
       ${forcedLines.length ? `<ul class="forced-list">${forcedLines.join('')}</ul>` : ''}
     </div>
     <div class="card">
       <table class="result-table fund-table">
-        <tr><th>ファンド</th><td>最終</td><td>損益</td></tr>
+        <tr><th>ファンド</th><td>評価額</td><td>損益</td></tr>
         ${a.byFund
           .map((b) => {
             const d = fundDef(b.fund);

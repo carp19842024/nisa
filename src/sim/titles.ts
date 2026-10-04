@@ -37,8 +37,8 @@ export const TITLES: Record<TitleId, Omit<Title, 'id'>> = {
 
 export interface TitleContext {
   allocation: Allocation;
-  /** 同じ積立額を「ぜんぶ入りファンド」だけで持ち続けた場合の最終評価額 */
-  zenbuOnlyFinal: number;
+  /** 同じ積立額を「ぜんぶ入りファンド」だけで持ち続けた場合の資産の合計 */
+  zenbuOnlyTotal: number;
 }
 
 export function determineTitle(summary: SimSummary, market: Market, ctx: TitleContext, cfg: Config = CONFIG): Title {
@@ -69,7 +69,7 @@ export function determineTitle(summary: SimSummary, market: Market, ctx: TitleCo
     return make(sales[sales.length - 1].type === 'letGo' ? 'shakenOff' : 'getOff');
   }
 
-  if (share('gold') >= tc.heavyShare && summary.finalValue < ctx.zenbuOnlyFinal) return make('goldBug');
+  if (share('gold') >= tc.heavyShare && summary.totalAssets < ctx.zenbuOnlyTotal) return make('goldBug');
 
   return make('normal');
 }

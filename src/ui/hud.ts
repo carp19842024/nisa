@@ -98,13 +98,12 @@ export class Hud {
 
   update(game: Game, overlay: Overlay, dtSec: number): void {
     const pf = game.portfolio;
-    const value = game.value;
-    const profit = value + pf.withdrawn - pf.contributed;
+    const profit = game.nisaValue + pf.withdrawn - pf.contributed;
     const rate = pf.contributed > 0 ? profit / pf.contributed : 0;
     const e = this.els;
 
     const stopped = pf.funds.filter((f) => !pf.holding(f).active).length;
-    const state = stopped === 0 ? 'NISA積立中' : stopped === pf.funds.length ? 'NISA停止中（貯金）' : `${stopped}本 停止中`;
+    const state = stopped === 0 ? 'NISA積立中' : stopped === pf.funds.length ? 'NISA停止中' : `${stopped}本 停止中`;
     this.set('date', e.date, monthLabel(Math.min(game.currentMonth, CONFIG.months - 1)));
     this.set('state', e.state, state, stopped === 0 ? 'state-chip' : 'state-chip sold');
     this.set('value', e.value, man(game.nisaValue));
@@ -112,17 +111,18 @@ export class Hud {
     this.set('profit', e.profit, pctSigned(rate), signClass(profit));
     this.set('emergency', e.emergency, man(pf.emergency), pf.emergency < 0 ? 'minus' : '');
 
-    // 売ったファンドがあるとき：移した貯金と、売らずに持っていたらとの差
+    // 売ったファンドがあるとき：資産の合計（NISA＋生活防衛資金）と、売らずに持っていたらとの差
     show(e.hold, stopped > 0);
     if (stopped > 0) {
-      const diff = value - game.holdValue;
-      this.set('cash', e.cash, man(pf.cash));
+      const total = game.totalAssets;
+      const diff = total - game.holdTotalAssets;
+      this.set('cash', e.cash, man(total));
       this.set('holdDiff', e.holdDiff, `差 ${manSigned(diff)}`, signClass(diff));
     }
 
     for (const c of this.chips) {
       const h = pf.holding(c.fund);
-      const v = h.active ? man(game.fundValue(c.fund)) : `貯金 ${man(h.cash)}`;
+      const v = h.active ? man(game.fundValue(c.fund)) : '停止中';
       this.set(`chipv-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-val')!, v);
       this.set(`chipa-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-act')!, h.active ? '長押しで売る' : '押すと再開');
       c.el.classList.toggle('stopped', !h.active);
@@ -198,7 +198,6 @@ export class Hud {
     const bad = o.forcedSale > 0 || o.debt > 0;
     const rows: string[] = [];
     if (o.fromEmergency > 0) rows.push(`<div><span>生活防衛資金から</span><span>${man(o.fromEmergency)}</span></div>`);
-    if (o.fromCash > 0) rows.push(`<div><span>NISAから移した貯金から</span><span>${man(o.fromCash)}</span></div>`);
     for (const [f, amt] of Object.entries(o.forcedByFund)) {
       rows.push(`<div class="minus"><span>${escapeHtml(fundDef(f as FundId).short)}を強制売却</span><span>${man(amt!)}</span></div>`);
     }
@@ -211,7 +210,6 @@ export class Hud {
           ? `防衛資金が足りず、暴落中（高値から${pctSigned(-o.drawdown, 0)}）のファンドを売るはめに…`
           : '防衛資金が足りず、ファンドを売って払った。';
     } else if (o.debt > 0) comment = 'お金が足りない…！';
-    else if (o.fromCash > 0) comment = 'NISAから移した貯金で払った。';
 
     m.innerHTML = `
       <div class="modal-card ${bad ? 'bad' : ''}">
@@ -234,6 +232,71 @@ export class Hud {
     show(m, true);
   }
 
+  /**
+   * 再開の画面：生活防衛資金からいくら移して買い直すかを選ぶ（0円なら積立だけ再開）
+   */
+  showBuyBack(game: Game, fund: FundId, onConfirm: (amount: number) => void, onCancel: () => void): void {
+    const m = this.els.modal;
+    const def = fundDef(fund);
+    const unit = 10_000;
+    const max = Math.max(0, game.portfolio.emergency);
+    const sold = game.lastSaleAmount(fund);
+    let amount = Math.min(Math.floor(sold / unit) * unit, Math.floor(max / unit) * unit);
+
+    m.innerHTML = `
+      <div class="modal-card buyback" style="--fund:${def.color}">
+        <h2>${escapeHtml(def.short)}の積立を再開</h2>
+        <p class="small">生活防衛資金から、いくら移して買い直す？<br>（0円なら、来月からの積立だけ再開）</p>
+        <div class="pay-list">
+          <div><span>生活防衛資金</span><span>${man(max)}</span></div>
+          ${sold > 0 ? `<div><span>前に売った額</span><span>${man(sold)}</span></div>` : ''}
+        </div>
+        <div class="amount-row">
+          <button type="button" data-d="-100000">−10万</button>
+          <button type="button" data-d="-10000">−1万</button>
+          <b id="bb-amount"></b>
+          <button type="button" data-d="10000">＋1万</button>
+          <button type="button" data-d="100000">＋10万</button>
+        </div>
+        <div class="amount-quick">
+          <button type="button" data-v="0">0円</button>
+          ${sold > 0 ? `<button type="button" data-v="${Math.min(sold, max)}">売った額</button>` : ''}
+          <button type="button" data-v="${max}">全額</button>
+        </div>
+        <p class="small" id="bb-left"></p>
+        <button class="btn primary" id="bb-ok" type="button">この金額で再開</button>
+        <button class="btn ghost" id="bb-cancel" type="button">やめる</button>
+      </div>`;
+    const amountEl = m.querySelector<HTMLElement>('#bb-amount')!;
+    const leftEl = m.querySelector<HTMLElement>('#bb-left')!;
+    const update = () => {
+      amountEl.textContent = man(amount);
+      leftEl.textContent = `再開後の生活防衛資金：${man(max - amount)}`;
+    };
+    m.querySelectorAll<HTMLButtonElement>('[data-d]').forEach((b) =>
+      b.addEventListener('click', () => {
+        amount = Math.max(0, Math.min(max, amount + Number(b.dataset.d)));
+        update();
+      }),
+    );
+    m.querySelectorAll<HTMLButtonElement>('[data-v]').forEach((b) =>
+      b.addEventListener('click', () => {
+        amount = Math.max(0, Math.min(max, Number(b.dataset.v)));
+        update();
+      }),
+    );
+    m.querySelector('#bb-ok')!.addEventListener('click', () => {
+      show(m, false);
+      onConfirm(amount);
+    });
+    m.querySelector('#bb-cancel')!.addEventListener('click', () => {
+      show(m, false);
+      onCancel();
+    });
+    update();
+    show(m, true);
+  }
+
   get modalOpen(): boolean {
     return !this.els.modal.classList.contains('hidden');
   }
@@ -243,9 +306,11 @@ export class Hud {
     const amount = recs.reduce((s, r) => s + r.amount, 0);
     const names = recs.map((r) => fundDef(r.fund).short).join('・');
     if (type === 'letGo')
-      this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}を貯金へ。下のボタンを押すと再開できる`, 'bad', 3.5);
-    else if (type === 'sell') this.banner(`${names}を売って貯金へ（${man(amount)}）。以降の積立分も貯金に回る`, 'bad', 2.8);
-    else this.banner(`${names}を再開！ 移していた${man(amount)}で買い直した`, 'good');
+      this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}は生活防衛資金へ。下のボタンを押すと再開できる`, 'bad', 3.5);
+    else if (type === 'sell')
+      this.banner(`${names}を売って生活防衛資金へ（${man(amount)}）。以降の積立分も積み立てずに貯金に残る`, 'bad', 2.8);
+    else if (amount > 0) this.banner(`${names}を再開！ 生活防衛資金から${man(amount)}を移して買い直した`, 'good');
+    else this.banner(`${names}の積立を再開！`, 'good');
   }
 }
 
