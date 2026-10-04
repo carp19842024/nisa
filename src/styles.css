@@ -393,7 +393,7 @@ button {
 .screen h1 {
   margin: 36px 0 0;
   text-align: center;
-  font-size: 46px;
+  font-size: 56px;
   line-height: 1.1;
   color: var(--yellow);
   text-shadow:
@@ -932,14 +932,4 @@ button {
 .bgm-btn.off {
   opacity: 0.45;
   text-decoration: line-through;
-}
-
-.screen h1 .title-sub {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 40px;
-  color: var(--mint);
-  text-shadow:
-    3px 3px 0 #3f9a7c,
-    6px 6px 0 #000;
 }
