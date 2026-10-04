@@ -22,8 +22,8 @@ export interface SpriteDef {
 }
 
 export const SPRITE_DEFS: Record<SpriteName, SpriteDef> = {
-  // run07.png は run01.png と同じ画像なので、ループでは 01〜06 を使う（07 まで入れると立ちポーズが2コマ続く）
-  run: { files: ['run01.png', 'run02.png', 'run03.png', 'run04.png', 'run05.png', 'run06.png'], fps: 11 },
+  // run01.png・run07.png（立ちポーズ）は使わず、02〜06 をループする
+  run: { files: ['run02.png', 'run03.png', 'run04.png', 'run05.png', 'run06.png'], fps: 10 },
   run_happy: { files: ['run_happy.png'], fps: 1 },
   shock: { files: ['shock.png'], fps: 1 },
   cling: { files: ['cling.png'], fps: 1 },
