@@ -49,11 +49,11 @@ describe('一度も売らない場合', () => {
   });
 });
 
-describe('ファンドを選んで売る・再開する', () => {
-  const market = fixedMarket((m) => (m < 10 ? 10_000 : 5_000), { gold: (m) => (m < 10 ? 10_000 : 12_000) });
+describe('ファンドを選んで売る・積立額を変える・まとめ買い', () => {
+  const market = fixedMarket((m) => (m < 10 ? 10_000 : 5_000), { gold: (m) => (m < 10 ? 10_000 : 12_000), mattari: () => 10_000 });
   const two: Allocation = { invest: { zenbu: 30_000, gold: 10_000 }, savePerMonth: 10_000 };
 
-  it('売った代金は生活防衛資金に入り、以降そのファンドの積立分も生活防衛資金に残る', () => {
+  it('売った代金は生活防衛資金に入り、そのファンドの積立も止まって生活防衛資金に残る', () => {
     const pf = new Portfolio(market, two, []);
     for (let m = 0; m < 5; m++) pf.startMonth(m);
     const before = pf.emergency;
@@ -61,76 +61,108 @@ describe('ファンドを選んで売る・再開する', () => {
     expect(recs).toHaveLength(1);
     expect(recs[0].amount).toBeCloseTo(150_000, 6);
     expect(pf.emergency).toBeCloseTo(before + 150_000, 6);
-    expect(pf.holding('zenbu').active).toBe(false);
-    expect(pf.holding('gold').active).toBe(true);
+    expect(pf.holding('zenbu').plan).toBe(0);
+    expect(pf.holding('zenbu').stoppedBySale).toBe(true);
+    expect(pf.isActive('gold')).toBe(true);
     expect(pf.invested).toBe(true);
     const afterSell = pf.emergency;
     for (let m = 5; m < 12; m++) pf.startMonth(m);
     // 7か月 ×（貯金1万＋止めたぜんぶ入りの3万）
     expect(pf.emergency).toBeCloseTo(afterSell + 7 * 40_000, 6);
-    expect(pf.holding('zenbu').units).toBe(0);
-    // 元本は実際に NISA に入れた分だけ（止めている間の3万は入らない）
     expect(pf.contributed).toBe(5 * 30_000 + 12 * 10_000);
     expect(pf.withdrawn).toBeCloseTo(150_000, 6);
   });
 
-  it('再開すると、生活防衛資金から指定額を移して買い直す（残高まで）', () => {
+  it('まとめ買いは生活防衛資金から（残高まで）。売ったファンドに入れると「再開」と数える', () => {
     const pf = new Portfolio(market, two, []);
     for (let m = 0; m < 12; m++) {
       pf.startMonth(m);
       if (m === 4) pf.sell(4, 'sell', 'zenbu');
     }
     const em = pf.emergency;
-    const recs = pf.buy(11, 'zenbu', 200_000);
-    expect(recs[0].amount).toBe(200_000);
+    const rec = pf.buy(11, 'zenbu', 200_000)!;
+    expect(rec.amount).toBe(200_000);
     expect(pf.holding('zenbu').units).toBeCloseTo(200_000 / 5_000, 6);
-    expect(pf.holding('zenbu').active).toBe(true);
     expect(pf.emergency).toBeCloseTo(em - 200_000, 6);
-    // 残高より多くは買えない
-    pf.sell(11, 'sell', 'zenbu');
-    const recs2 = pf.buy(11, 'zenbu', 99_999_999);
-    expect(recs2[0].amount).toBeCloseTo(em, 6);
+    expect(pf.buyCount).toBe(1);
+    // まとめ買いだけでは積立は再開しない
+    expect(pf.holding('zenbu').plan).toBe(0);
+    const rec2 = pf.buy(11, 'zenbu', 99_999_999)!;
+    expect(rec2.amount).toBeCloseTo(em - 200_000, 6);
     expect(pf.emergency).toBeCloseTo(0, 6);
   });
 
-  it('0円で再開すると、積立だけ再開する', () => {
+  it('再開（resume）は売る前の積立額に戻す', () => {
     const pf = new Portfolio(market, two, []);
     pf.startMonth(0);
-    pf.sell(0, 'sell', 'zenbu');
-    const em = pf.emergency;
-    pf.buy(0, 'zenbu', 0);
-    expect(pf.emergency).toBe(em);
+    pf.sell(0, 'sell');
+    expect(pf.invested).toBe(false);
+    expect(pf.resume(0)).toHaveLength(2);
+    expect(pf.holding('zenbu').plan).toBe(30_000);
+    expect(pf.holding('gold').plan).toBe(10_000);
     pf.startMonth(1);
     expect(pf.holding('zenbu').units).toBeCloseTo(30_000 / 10_000, 6);
+    expect(pf.buyCount).toBe(2);
   });
 
-  it('損益 = NISA の評価額 + NISA から出したお金 − NISA に入れたお金', () => {
-    const actions = [
-      { month: 4, type: 'sell' as const, fund: 'zenbu' as const },
-      { month: 11, type: 'buy' as const, fund: 'zenbu' as const, amount: 100_000 },
-    ];
-    const r = runSimulation(market, two, [], actions);
-    expect(r.profit).toBeCloseTo(r.finalValue + r.withdrawn - r.contributed, 6);
-    expect(r.totalAssets).toBeCloseTo(r.finalValue + r.emergencyFinal, 6);
-  });
-
-  it('ファンドを省略して売ると、積立中の全ファンドが対象。握力切れも全部売る', () => {
+  it('最初に選ばなかったファンドも、途中から積立できる（余裕資金の範囲まで）', () => {
     const pf = new Portfolio(market, two, []);
     pf.startMonth(0);
-    expect(pf.sell(0, 'sell')).toHaveLength(2);
-    expect(pf.invested).toBe(false);
-    expect(pf.buy(0)).toHaveLength(2);
+    // 余裕資金は 5万。ぜんぶ入り3万＋ゴールド1万なので、バランスは1万まで
+    expect(pf.maxPlan('mattari')).toBe(10_000);
+    const r = pf.setPlan(0, 'mattari', 30_000)!;
+    expect(r.amount).toBe(10_000);
+    const em = pf.emergency;
     pf.startMonth(1);
-    expect(pf.sell(1, 'letGo')).toHaveLength(2);
-    expect(pf.letGoCount).toBe(1);
-    expect(pf.sellCount).toBe(2);
+    expect(pf.holding('mattari').units).toBeCloseTo(1, 6);
+    // 貯金に回る分がなくなる
+    expect(pf.emergency).toBe(em);
+    // ぜんぶ入りを減らせば、その分をほかに回せる
+    pf.setPlan(1, 'zenbu', 10_000);
+    expect(pf.maxPlan('mattari')).toBe(30_000);
+  });
+
+  it('NISA の年間上限（360万円）を超える分は買えず、生活防衛資金に残る。翌年に戻る', () => {
+    const rich = fixedMarket(() => 10_000);
+    const pf = new Portfolio(rich, zenbu(50_000, 0), []);
+    pf.emergency = 10_000_000;
+    pf.startMonth(0);
+    const r = pf.buy(0, 'zenbu', 5_000_000)!;
+    expect(r.amount).toBe(3_600_000 - 50_000);
+    expect(pf.quota().annualLeft).toBe(0);
+    // 上限に達した年は、毎月の積立も買えずに生活防衛資金に残る
+    const em = pf.emergency;
+    pf.startMonth(1);
+    expect(pf.emergency).toBe(em + 50_000);
+    expect(pf.overCapTotal).toBe(50_000);
+    for (let m = 2; m < 12; m++) pf.startMonth(m);
+    pf.startMonth(12);
+    expect(pf.quota().annualLeft).toBe(3_600_000 - 50_000);
+  });
+
+  it('NISA の生涯上限（1,800万円・簿価）。売った分の枠は翌年に戻る', () => {
+    const rich = fixedMarket(() => 10_000);
+    const pf = new Portfolio(rich, zenbu(0, 50_000), []);
+    pf.emergency = 100_000_000;
+    for (let m = 0; m < 60; m++) {
+      pf.startMonth(m);
+      if (m % 12 === 0) pf.buy(m, 'zenbu', 3_600_000);
+    }
+    // 5年で 1,800万円使い切る
+    expect(pf.quota().lifetimeLeft).toBe(0);
+    expect(pf.buy(60 - 1, 'zenbu', 1_000_000)).toBeNull();
+    pf.sell(59, 'sell', 'zenbu');
+    // 売った年のうちは戻らない
+    expect(pf.quota().lifetimeLeft).toBe(0);
+    pf.startMonth(60);
+    expect(pf.quota().lifetimeLeft).toBe(18_000_000);
   });
 
   it('同じ操作ログを再生すると同じ結果になる', () => {
     const m = generateMarket(5);
     const actions = [
       { month: 30, type: 'sell' as const, fund: 'rocket' as const },
-      { month: 50, type: 'buy' as const, fund: 'rocket' as const },
+      { month: 50, type: 'buy' as const, fund: 'rocket' as const, amount: 100_000 },
       { month: 100, type: 'letGo' as const },
     ];
     const a: Allocation = { invest: { zenbu: 20_000, rocket: 20_000 }, savePerMonth: 10_000 };
@@ -210,7 +242,7 @@ describe('ずっと持ち続けていたら', () => {
     const events: LifeEvent[] = [{ month: 60, id: 'move', name: '引っ越し', cost: 400_000 }];
     const actions = [
       { month: 40, type: 'sell' as const, fund: 'zenbu' as const },
-      { month: 80, type: 'buy' as const, fund: 'zenbu' as const },
+      { month: 80, type: 'resume' as const, fund: 'zenbu' as const },
     ];
     const res = evaluateGame(market, a, events, actions);
     expect(res.hold).toEqual(runSimulation(market, a, events, []));

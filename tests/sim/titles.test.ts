@@ -28,9 +28,9 @@ describe('称号', () => {
     expect(title([], [], { invest: { zenbu: 20_000, gold: 10_000, mattari: 10_000 }, savePerMonth: 10_000 })).toBe('diversified');
   });
   it('底で売る天才（±2か月）', () => {
-    expect(title([{ month: 98, type: 'sell' }, { month: 120, type: 'buy' }])).toBe('bottomGenius');
-    expect(title([{ month: 102, type: 'letGo' }, { month: 120, type: 'buy' }])).toBe('bottomGenius');
-    expect(title([{ month: 97, type: 'sell' }, { month: 120, type: 'buy' }])).not.toBe('bottomGenius');
+    expect(title([{ month: 98, type: 'sell' }, { month: 120, type: 'resume' }])).toBe('bottomGenius');
+    expect(title([{ month: 102, type: 'letGo' }, { month: 120, type: 'resume' }])).toBe('bottomGenius');
+    expect(title([{ month: 97, type: 'sell' }, { month: 120, type: 'resume' }])).not.toBe('bottomGenius');
   });
   it('生活に負けた人（強制売却30万円以上）', () => {
     const ev: LifeEvent[] = [{ month: 20, id: 'job', name: '無収入', cost: 600_000 }];
@@ -42,11 +42,11 @@ describe('称号', () => {
   });
   it('ロケットに夢を見た人（ロケット中心で、ロケットを売った）', () => {
     const a: Allocation = { invest: { rocket: 30_000, zenbu: 10_000 }, savePerMonth: 10_000 };
-    expect(title([{ month: 50, type: 'sell', fund: 'rocket' }, { month: 60, type: 'buy', fund: 'rocket' }], [], a)).toBe('rocketDreamer');
+    expect(title([{ month: 50, type: 'sell', fund: 'rocket' }, { month: 60, type: 'resume', fund: 'rocket' }], [], a)).toBe('rocketDreamer');
   });
   it('タイミングの魔術師（売却と買い直しを3回以上）', () => {
     const acts: PlayerAction[] = [];
-    for (const m of [10, 30, 50]) acts.push({ month: m, type: 'sell' }, { month: m + 5, type: 'buy' });
+    for (const m of [10, 30, 50]) acts.push({ month: m, type: 'sell' }, { month: m + 5, type: 'resume' });
     expect(title(acts)).toBe('timingWizard');
   });
   it('途中下車（自分で売って、最後まで1本も積立していない）', () => {
@@ -61,13 +61,13 @@ describe('称号', () => {
   it('振り落とされた人（握力切れで全部売り、そのまま戻らない）', () => {
     expect(title([{ month: 50, type: 'letGo' }])).toBe('shakenOff');
     // 握力切れのあと再開すれば当てはまらない
-    expect(title([{ month: 50, type: 'letGo' }, { month: 60, type: 'buy' }])).toBe('normal');
+    expect(title([{ month: 50, type: 'letGo' }, { month: 60, type: 'resume' }])).toBe('normal');
   });
   it('金の亡者（ゴールド中心で、ぜんぶ入りだけより少ない）', () => {
     const a: Allocation = { invest: { gold: 30_000, zenbu: 10_000 }, savePerMonth: 10_000 };
-    expect(title([{ month: 50, type: 'sell', fund: 'zenbu' }, { month: 60, type: 'buy', fund: 'zenbu' }], [], a)).toBe('goldBug');
+    expect(title([{ month: 50, type: 'sell', fund: 'zenbu' }, { month: 60, type: 'resume', fund: 'zenbu' }], [], a)).toBe('goldBug');
   });
   it('ふつうにえらい', () => {
-    expect(title([{ month: 50, type: 'sell' }, { month: 60, type: 'buy' }])).toBe('normal');
+    expect(title([{ month: 50, type: 'sell' }, { month: 60, type: 'resume' }])).toBe('normal');
   });
 });

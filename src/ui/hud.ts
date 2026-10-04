@@ -63,8 +63,11 @@ export class Hud {
     if (cls !== undefined) el.className = cls;
   }
 
-  /** 画面下のファンドごとのボタン。積立中は長押しで売る、停止中は押すと再開 */
-  setupChips(game: Game, onSell: (f: FundId) => void, onBuy: (f: FundId) => void): void {
+  /**
+   * 画面下のファンドごとのボタン（全ファンド）。
+   * 長押し＝そのファンドを売る、タップ＝そのファンドの設定（積立額の変更・まとめ買い。持っていないファンドも始められる）
+   */
+  setupChips(game: Game, onSell: (f: FundId) => void, onConfigure: (f: FundId) => void): void {
     this.resetHolds();
     this.last = {};
     const box = this.els.chips;
@@ -78,8 +81,8 @@ export class Hud {
       el.innerHTML = `<span class="hold-fill"></span><span class="chip-name"></span><span class="chip-val"></span><span class="chip-act"></span>`;
       el.querySelector('.chip-name')!.textContent = def.short;
       const hold = setupHoldButton(el, CONFIG.controls.sellHoldMs, () => onSell(fund), {
-        canHold: () => game.portfolio.holding(fund).active,
-        onTap: () => onBuy(fund),
+        canHold: () => game.portfolio.isActive(fund),
+        onTap: () => onConfigure(fund),
       });
       box.appendChild(el);
       return { fund, el, hold };
@@ -102,8 +105,9 @@ export class Hud {
     const rate = pf.contributed > 0 ? profit / pf.contributed : 0;
     const e = this.els;
 
-    const stopped = pf.funds.filter((f) => !pf.holding(f).active).length;
-    const state = stopped === 0 ? 'NISA積立中' : stopped === pf.funds.length ? 'NISA停止中' : `${stopped}本 停止中`;
+    const stopped = pf.funds.filter((f) => pf.holding(f).stoppedBySale && !pf.isActive(f)).length;
+    const activeCount = pf.funds.filter((f) => pf.isActive(f)).length;
+    const state = !pf.invested ? 'NISA停止中' : stopped > 0 ? `${stopped}本 売却中` : `NISA ${activeCount}本`;
     this.set('date', e.date, monthLabel(Math.min(game.currentMonth, CONFIG.months - 1)));
     this.set('state', e.state, state, stopped === 0 ? 'state-chip' : 'state-chip sold');
     this.set('value', e.value, man(game.nisaValue));
@@ -122,12 +126,15 @@ export class Hud {
 
     for (const c of this.chips) {
       const h = pf.holding(c.fund);
-      const v = h.active ? man(game.fundValue(c.fund)) : '停止中';
+      const active = pf.isActive(c.fund);
+      const planText = h.plan > 0 ? `月${man(h.plan, 0)}` : '積立なし';
+      const v = h.units > 0 ? man(game.fundValue(c.fund)) : active ? '来月から' : h.stoppedBySale ? '売却済み' : '未購入';
+      const act = active ? planText : h.stoppedBySale ? 'タップで再開' : 'タップで追加';
       this.set(`chipv-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-val')!, v);
-      this.set(`chipa-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-act')!, h.active ? '長押しで売る' : '押すと再開');
-      c.el.classList.toggle('stopped', !h.active);
+      this.set(`chipa-${c.fund}`, c.el.querySelector<HTMLElement>('.chip-act')!, act);
+      c.el.classList.toggle('stopped', !active);
       // 全部売っている間は、再開できることが分かるようにボタンを点滅させる
-      c.el.classList.toggle('beckon', !h.active && !game.invested);
+      c.el.classList.toggle('beckon', !active && h.stoppedBySale && !game.invested);
     }
 
     const g = game.grip.value / CONFIG.grip.max;
@@ -233,63 +240,96 @@ export class Hud {
   }
 
   /**
-   * 再開の画面：生活防衛資金からいくら移して買い直すかを選ぶ（0円なら積立だけ再開）
+   * ファンドの設定画面：毎月の積立額と、生活防衛資金からのまとめ買い。
+   * NISA の年間・生涯の購入上限の残りも表示する
    */
-  showBuyBack(game: Game, fund: FundId, onConfirm: (amount: number) => void, onCancel: () => void): void {
+  showFundSettings(game: Game, fund: FundId, onConfirm: (plan: number, lump: number) => void, onCancel: () => void): void {
     const m = this.els.modal;
+    const pf = game.portfolio;
+    const h = pf.holding(fund);
     const def = fundDef(fund);
     const unit = 10_000;
-    const max = Math.max(0, game.portfolio.emergency);
+    const q = pf.quota();
+    const maxPlan = pf.maxPlan(fund);
+    const maxLump = Math.max(0, Math.min(pf.emergency, q.left));
     const sold = game.lastSaleAmount(fund);
-    let amount = Math.min(Math.floor(sold / unit) * unit, Math.floor(max / unit) * unit);
+    const restarting = h.stoppedBySale && h.plan === 0;
+    let plan = restarting ? Math.min(h.lastPlan, maxPlan) : h.plan;
+    let lump = restarting ? Math.min(Math.floor(sold / unit) * unit, Math.floor(maxLump / unit) * unit) : 0;
+    const otherPlans = pf.planTotal - h.plan;
 
     m.innerHTML = `
       <div class="modal-card buyback" style="--fund:${def.color}">
-        <h2>${escapeHtml(def.short)}の積立を再開</h2>
-        <p class="small">生活防衛資金から、いくら移して買い直す？<br>（0円なら、来月からの積立だけ再開）</p>
+        <h2>${escapeHtml(def.name)}</h2>
+        <p class="small">${escapeHtml(def.desc)}</p>
         <div class="pay-list">
-          <div><span>生活防衛資金</span><span>${man(max)}</span></div>
-          ${sold > 0 ? `<div><span>前に売った額</span><span>${man(sold)}</span></div>` : ''}
+          ${h.units > 0 ? `<div><span>評価額</span><span>${man(game.fundValue(fund))}</span></div>` : ''}
+          <div><span>生活防衛資金</span><span>${man(pf.emergency)}</span></div>
+          <div><span>NISA枠 今年あと</span><span>${man(q.annualLeft)}</span></div>
+          <div><span>NISA枠 生涯あと</span><span>${man(q.lifetimeLeft)}</span></div>
         </div>
+        <p class="setting-label">毎月の積立額</p>
+        <div class="amount-row">
+          <button type="button" data-p="-10000">−1万</button>
+          <b id="fs-plan"></b>
+          <button type="button" data-p="10000">＋1万</button>
+        </div>
+        <p class="small" id="fs-plan-note"></p>
+        <p class="setting-label">まとめ買い（生活防衛資金から）</p>
         <div class="amount-row">
           <button type="button" data-d="-100000">−10万</button>
           <button type="button" data-d="-10000">−1万</button>
-          <b id="bb-amount"></b>
+          <b id="fs-lump"></b>
           <button type="button" data-d="10000">＋1万</button>
           <button type="button" data-d="100000">＋10万</button>
         </div>
         <div class="amount-quick">
           <button type="button" data-v="0">0円</button>
-          ${sold > 0 ? `<button type="button" data-v="${Math.min(sold, max)}">売った額</button>` : ''}
-          <button type="button" data-v="${max}">全額</button>
+          ${sold > 0 ? `<button type="button" data-v="${Math.min(sold, maxLump)}">売った額</button>` : ''}
+          <button type="button" data-v="${maxLump}">買える上限</button>
         </div>
-        <p class="small" id="bb-left"></p>
-        <button class="btn primary" id="bb-ok" type="button">この金額で再開</button>
-        <button class="btn ghost" id="bb-cancel" type="button">やめる</button>
+        <p class="small" id="fs-left"></p>
+        <button class="btn primary" id="fs-ok" type="button">決定</button>
+        <button class="btn ghost" id="fs-cancel" type="button">やめる</button>
       </div>`;
-    const amountEl = m.querySelector<HTMLElement>('#bb-amount')!;
-    const leftEl = m.querySelector<HTMLElement>('#bb-left')!;
+    const planEl = m.querySelector<HTMLElement>('#fs-plan')!;
+    const planNote = m.querySelector<HTMLElement>('#fs-plan-note')!;
+    const lumpEl = m.querySelector<HTMLElement>('#fs-lump')!;
+    const leftEl = m.querySelector<HTMLElement>('#fs-left')!;
     const update = () => {
-      amountEl.textContent = man(amount);
-      leftEl.textContent = `再開後の生活防衛資金：${man(max - amount)}`;
+      planEl.textContent = man(plan, 0);
+      const save = pf.monthlyIncome - otherPlans - plan;
+      planNote.textContent =
+        maxPlan <= plan && plan < pf.monthlyIncome
+          ? `毎月の貯金：${man(save, 0)}（増やすには、ほかのファンドの積立額を減らす）`
+          : `毎月の貯金：${man(save, 0)}`;
+      lumpEl.textContent = man(lump);
+      const capNote = maxLump < pf.emergency ? '（NISA枠の上限まで）' : '';
+      leftEl.textContent = `まとめ買い後の生活防衛資金：${man(pf.emergency - lump)}${capNote}`;
     };
+    m.querySelectorAll<HTMLButtonElement>('[data-p]').forEach((b) =>
+      b.addEventListener('click', () => {
+        plan = Math.max(0, Math.min(maxPlan, plan + Number(b.dataset.p)));
+        update();
+      }),
+    );
     m.querySelectorAll<HTMLButtonElement>('[data-d]').forEach((b) =>
       b.addEventListener('click', () => {
-        amount = Math.max(0, Math.min(max, amount + Number(b.dataset.d)));
+        lump = Math.max(0, Math.min(maxLump, lump + Number(b.dataset.d)));
         update();
       }),
     );
     m.querySelectorAll<HTMLButtonElement>('[data-v]').forEach((b) =>
       b.addEventListener('click', () => {
-        amount = Math.max(0, Math.min(max, Number(b.dataset.v)));
+        lump = Math.max(0, Math.min(maxLump, Number(b.dataset.v)));
         update();
       }),
     );
-    m.querySelector('#bb-ok')!.addEventListener('click', () => {
+    m.querySelector('#fs-ok')!.addEventListener('click', () => {
       show(m, false);
-      onConfirm(amount);
+      onConfirm(plan, lump);
     });
-    m.querySelector('#bb-cancel')!.addEventListener('click', () => {
+    m.querySelector('#fs-cancel')!.addEventListener('click', () => {
       show(m, false);
       onCancel();
     });
@@ -301,16 +341,16 @@ export class Hud {
     return !this.els.modal.classList.contains('hidden');
   }
 
-  /** 売却（NISA→貯金）・買い直し（NISA再開）の通知 */
-  trade(type: 'sell' | 'letGo' | 'buy', recs: TradeRecord[]): void {
+  /** 売買・積立額の変更の通知 */
+  trade(type: TradeRecord['type'], recs: TradeRecord[]): void {
     const amount = recs.reduce((s, r) => s + r.amount, 0);
     const names = recs.map((r) => fundDef(r.fund).short).join('・');
     if (type === 'letGo')
-      this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}は生活防衛資金へ。下のボタンを押すと再開できる`, 'bad', 3.5);
-    else if (type === 'sell')
-      this.banner(`${names}を売って生活防衛資金へ（${man(amount)}）。以降の積立分も積み立てずに貯金に残る`, 'bad', 2.8);
-    else if (amount > 0) this.banner(`${names}を再開！ 生活防衛資金から${man(amount)}を移して買い直した`, 'good');
-    else this.banner(`${names}の積立を再開！`, 'good');
+      this.banner(`握力が尽きた…手を離して全部売却。${man(amount)}は生活防衛資金へ。下のボタンから再開できる`, 'bad', 3.5);
+    else if (type === 'sell') this.banner(`${names}を売って生活防衛資金へ（${man(amount)}）。積立も止めた`, 'bad', 2.8);
+    else if (type === 'buy') this.banner(`${names}を${man(amount)}まとめ買い！`, 'good');
+    else if (type === 'resume') this.banner(`${names}の積立を再開！`, 'good');
+    else this.banner(amount > 0 ? `${names}の積立を毎月${man(amount, 0)}に` : `${names}の積立を止めた`, 'normal', 1.8);
   }
 }
 

@@ -224,6 +224,8 @@ export class Game {
     const m = this.currentMonth;
     const pf = this.portfolio;
     let ws = pf.funds.map((f): [FundId, number] => [f, pf.holding(f).units * pf.price(f, m)]);
+    // 何も持っていなければ、今の積立額の比率 → それも無ければ最初の配分で描く
+    if (ws.every(([, w]) => w <= 0)) ws = pf.funds.map((f): [FundId, number] => [f, pf.holding(f).plan]);
     if (ws.every(([, w]) => w <= 0)) ws = pf.funds.map((f): [FundId, number] => [f, this.allocation.invest[f] ?? 0]);
     const total = ws.reduce((s, [, w]) => s + w, 0);
     return ws.filter(([, w]) => w > 0).map(([f, w]) => [f, w / total]);
@@ -257,7 +259,10 @@ export class Game {
 
   /** 線の背景に薄く描く、各ファンドの値動き */
   get chartFunds(): { fund: FundId; prices: number[] }[] {
-    return this.portfolio.funds.map((f) => ({ fund: f, prices: fundPrices(this.market, f) }));
+    const pf = this.portfolio;
+    return pf.funds
+      .filter((f) => pf.isActive(f) || pf.holding(f).contributed > 0)
+      .map((f) => ({ fund: f, prices: fundPrices(this.market, f) }));
   }
 
   // ---------------------------------------------------------------------------
@@ -274,7 +279,7 @@ export class Game {
     if (recs.length === 0) return false;
     const action: PlayerAction = { month: recs[0].month, type };
     if (fund) action.fund = fund;
-    if (amount) action.amount = amount;
+    if (amount !== undefined && (type === 'plan' || amount > 0)) action.amount = amount;
     this.actions.push(action);
     this.reanchor(this.t);
     this.cb.onTrade(type, recs);
@@ -299,12 +304,28 @@ export class Game {
     audio.play('sell');
   }
 
-  /** 「再開」：積立を再開し、生活防衛資金から amount 円を移して買い直す。fund を省略すると停止中の全部（買い直しなし） */
-  buyBack(fund?: FundId, amount = 0): void {
+  /**
+   * ファンドの設定：毎月の積立額を plan 円にし、生活防衛資金から lump 円でまとめ買いする。
+   * 最初に選ばなかったファンドを途中から始めることもできる
+   */
+  configureFund(fund: FundId, plan: number, lump: number): void {
     if (this.paused || this.finished) return;
     const wasInvested = this.invested;
-    const recs = this.portfolio.buy(this.currentMonth, fund, amount);
-    if (!this.record('buy', recs, fund, fund ? recs[0]?.amount : undefined)) return;
+    const m = this.currentMonth;
+    const p = this.portfolio.setPlan(m, fund, plan);
+    const b = lump > 0 ? this.portfolio.buy(m, fund, lump) : null;
+    const changed = [this.record('plan', p ? [p] : [], fund, p?.amount), this.record('buy', b ? [b] : [], fund, b?.amount)];
+    if (!changed.some(Boolean)) return;
+    if (!wasInvested) this.grip.reset();
+    audio.play('buy');
+  }
+
+  /** 売って止めたファンドの積立を、売る前の積立額で全部再開（PC の B キー） */
+  resumeAll(): void {
+    if (this.paused || this.finished) return;
+    const wasInvested = this.invested;
+    const recs = this.portfolio.resume(this.currentMonth);
+    if (!this.record('resume', recs)) return;
     if (!wasInvested) this.grip.reset();
     audio.play('buy');
   }
@@ -338,7 +359,7 @@ export class Game {
 
   /** そのファンドを最後に売ったときの金額（再開時の買い直し額の目安） */
   lastSaleAmount(f: FundId): number {
-    const t = [...this.portfolio.trades].reverse().find((r) => r.fund === f && r.type !== 'buy');
+    const t = [...this.portfolio.trades].reverse().find((r) => r.fund === f && (r.type === 'sell' || r.type === 'letGo'));
     return t?.amount ?? 0;
   }
 }

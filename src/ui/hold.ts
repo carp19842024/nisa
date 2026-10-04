@@ -1,8 +1,10 @@
-// 長押しボタン（誤操作防止）。指を離すとキャンセル。
-// canHold() が false のときは長押しではなく、押した瞬間に onTap を呼ぶ（停止中のファンドの「再開」など）。
+// 長押しボタン（誤操作防止）。長押しの途中で指を離すとキャンセル。
+// onTap を渡すと、長押しにならずに短く押して離したときに onTap を呼ぶ。
+// canHold() が false のときは長押しを受け付けず、押した瞬間に onTap を呼ぶ。
 
 export interface HoldButton {
   press(): void;
+  /** 指を離した（短く押しただけなら onTap） */
   release(): void;
   reset(): void;
 }
@@ -44,7 +46,9 @@ export function setupHoldButton(btn: HTMLElement, holdMs: number, onConfirm: () 
       raf = requestAnimationFrame(tick);
     },
     release() {
+      const wasShort = start > 0;
       api.reset();
+      if (wasShort) opts.onTap?.();
     },
     reset() {
       start = 0;
@@ -64,8 +68,9 @@ export function setupHoldButton(btn: HTMLElement, holdMs: number, onConfirm: () 
     }
     api.press();
   });
-  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
-    btn.addEventListener(type, () => api.release());
+  btn.addEventListener('pointerup', () => api.release());
+  for (const type of ['pointercancel', 'lostpointercapture'] as const) {
+    btn.addEventListener(type, () => api.reset());
   }
   btn.addEventListener('contextmenu', (e) => e.preventDefault());
   return api;

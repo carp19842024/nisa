@@ -189,17 +189,17 @@ function startGame(seed: number): void {
     game,
     (f) => game?.sell(f),
     (f) => {
-      // 停止中のファンドを押した：ゲームを止めて、生活防衛資金からいくら移すかを選ぶ
+      // ファンドをタップした：ゲームを止めて、積立額とまとめ買いの額を選ぶ
       const g = game;
       if (!g || !isRunning()) return;
       resetHolds();
       g.paused = true;
-      hud.showBuyBack(
+      hud.showFundSettings(
         g,
         f,
-        (amount) => {
+        (plan, lump) => {
           g.paused = false;
-          g.buyBack(f, amount);
+          g.configureFund(f, plan, lump);
         },
         () => {
           g.paused = false;
@@ -300,7 +300,7 @@ window.addEventListener('keydown', (e) => {
   } else if (DIGIT_KEYS.includes(e.code)) {
     if (!e.repeat && isRunning()) hud.chip(DIGIT_KEYS.indexOf(e.code))?.press();
   } else if (e.code === 'KeyB') {
-    if (isRunning()) game.buyBack();
+    if (isRunning()) game.resumeAll();
   } else if (e.code === 'KeyM') {
     if (!e.repeat) toggleBgm();
   } else if (e.code === 'Escape' || e.code === 'KeyP') {
