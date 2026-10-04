@@ -1,39 +1,49 @@
 // スプライトの定義と読み込み。
 // public/sprites/ に PNG を置けば自動で差し替わる。無ければドット絵風のプレースホルダーを描いて使う。
-// コマ数・コマサイズが違う画像を置くときは SPRITE_DEFS を書き換える。
+// 画像は大きいままでよい（読み込み時にゲーム内の大きさ SPRITE_HEIGHT へ縮小する）。
+// HTML の画面（設定・イベント・結果）では、縮小前の元画像を使ってなめらかに表示する。
 
 export type SpriteName = 'run' | 'run_happy' | 'shock' | 'cling' | 'cling_cry' | 'fall' | 'walk' | 'sad' | 'victory';
 
+/** ゲーム内（360×640 の論理解像度）での主人公の高さ（px） */
+export const SPRITE_HEIGHT = 80;
+
 export interface SpriteDef {
-  file: string;
-  /** 横に並んだコマ数 */
-  frames: number;
-  /** 1コマの幅・高さ（px） */
-  frameW: number;
-  frameH: number;
+  /** コマの画像ファイル（並び順＝再生順）。1枚に横並びで入っている場合は1つだけ書いて sheetFrames を指定 */
+  files: string[];
+  /** 1枚の画像に横並びで入っているコマ数 */
+  sheetFrames?: number;
   /** アニメーション速度（コマ/秒） */
   fps: number;
+  /** 画像が無いとき、代わりに使うスプライト */
+  fallback?: SpriteName;
+  /** 代わりのスプライトを使うときの速度 */
+  fallbackFps?: number;
 }
 
 export const SPRITE_DEFS: Record<SpriteName, SpriteDef> = {
-  run: { file: 'run.png', frames: 4, frameW: 64, frameH: 64, fps: 10 },
-  run_happy: { file: 'run_happy.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  shock: { file: 'shock.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  cling: { file: 'cling.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  cling_cry: { file: 'cling_cry.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  fall: { file: 'fall.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  walk: { file: 'walk.png', frames: 2, frameW: 64, frameH: 64, fps: 4 },
-  sad: { file: 'sad.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
-  victory: { file: 'victory.png', frames: 1, frameW: 64, frameH: 64, fps: 1 },
+  // run07.png は run01.png と同じ画像なので、ループでは 01〜06 を使う（07 まで入れると立ちポーズが2コマ続く）
+  run: { files: ['run01.png', 'run02.png', 'run03.png', 'run04.png', 'run05.png', 'run06.png'], fps: 11 },
+  run_happy: { files: ['run_happy.png'], fps: 1 },
+  shock: { files: ['shock.png'], fps: 1 },
+  cling: { files: ['cling.png'], fps: 1 },
+  cling_cry: { files: ['cling_cry.png'], fps: 1 },
+  fall: { files: ['fall.png'], fps: 1, fallback: 'shock' },
+  walk: { files: ['walk.png'], sheetFrames: 2, fps: 4, fallback: 'run', fallbackFps: 5 },
+  sad: { files: ['sad.png'], fps: 1 },
+  victory: { files: ['victory.png'], fps: 1 },
 };
 
 export interface Sprite {
+  /** ゲーム内用に縮小したコマを横に並べた画像 */
   image: CanvasImageSource;
   frames: number;
   frameW: number;
   frameH: number;
   fps: number;
   placeholder: boolean;
+  /** 縮小前の元画像（コマごと）。HTML の画面でなめらかに表示するのに使う */
+  hiRes?: { image: CanvasImageSource; sx: number; sy: number; sw: number; sh: number }[];
 }
 
 export type SpriteSet = Record<SpriteName, Sprite>;
@@ -47,25 +57,78 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+/** 大きな画像を、半分ずつ段階的に縮めてから目的の大きさにする（一気に縮めるより線がきれいに残る） */
+function downscale(
+  src: CanvasImageSource,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  w: number,
+  h: number,
+): HTMLCanvasElement {
+  let cur = document.createElement('canvas');
+  cur.width = sw;
+  cur.height = sh;
+  cur.getContext('2d')!.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  while (cur.width / 2 >= w && cur.height / 2 >= h) {
+    const next = document.createElement('canvas');
+    next.width = Math.ceil(cur.width / 2);
+    next.height = Math.ceil(cur.height / 2);
+    const ctx = next.getContext('2d')!;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cur, 0, 0, next.width, next.height);
+    cur = next;
+  }
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d')!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(cur, 0, 0, w, h);
+  return out;
+}
+
+async function loadSprite(def: SpriteDef, base: string): Promise<Sprite> {
+  const images = await Promise.all(def.files.map((f) => loadImage(`${base}sprites/${f}`)));
+  const hiRes: NonNullable<Sprite['hiRes']> = [];
+  for (const img of images) {
+    const n = def.files.length === 1 ? (def.sheetFrames ?? 1) : 1;
+    const sw = Math.floor(img.naturalWidth / n);
+    for (let i = 0; i < n; i++) hiRes.push({ image: img, sx: i * sw, sy: 0, sw, sh: img.naturalHeight });
+  }
+  const frameH = SPRITE_HEIGHT;
+  const frameW = Math.round((hiRes[0].sw * frameH) / hiRes[0].sh);
+  const sheet = document.createElement('canvas');
+  sheet.width = frameW * hiRes.length;
+  sheet.height = frameH;
+  const ctx = sheet.getContext('2d')!;
+  hiRes.forEach((f, i) => ctx.drawImage(downscale(f.image, f.sx, f.sy, f.sw, f.sh, frameW, frameH), i * frameW, 0));
+  return { image: sheet, frames: hiRes.length, frameW, frameH, fps: def.fps, placeholder: false, hiRes };
+}
+
 export async function loadSprites(): Promise<SpriteSet> {
   const base = import.meta.env.BASE_URL ?? './';
   const names = Object.keys(SPRITE_DEFS) as SpriteName[];
-  const entries = await Promise.all(
-    names.map(async (name): Promise<[SpriteName, Sprite]> => {
+  const loaded = Object.fromEntries(
+    await Promise.all(
+      names.map(async (name) => [name, await loadSprite(SPRITE_DEFS[name], base).catch(() => null)] as const),
+    ),
+  ) as Record<SpriteName, Sprite | null>;
+
+  // 画像が無いものは、代わりのスプライト → それも無ければプレースホルダー
+  return Object.fromEntries(
+    names.map((name) => {
+      const own = loaded[name];
+      if (own) return [name, own];
       const def = SPRITE_DEFS[name];
-      try {
-        const img = await loadImage(`${base}sprites/${def.file}`);
-        // 定義と画像サイズが合わないときは、横幅をコマ数で割って合わせる
-        const fits = img.naturalWidth === def.frames * def.frameW && img.naturalHeight === def.frameH;
-        const frameW = fits ? def.frameW : Math.floor(img.naturalWidth / def.frames);
-        const frameH = fits ? def.frameH : img.naturalHeight;
-        return [name, { image: img, frames: def.frames, frameW, frameH, fps: def.fps, placeholder: false }];
-      } catch {
-        return [name, makePlaceholder(name)];
-      }
+      const fb = def.fallback ? loaded[def.fallback] : null;
+      if (fb) return [name, { ...fb, fps: def.fallbackFps ?? fb.fps }];
+      return [name, makePlaceholder(name)];
     }),
-  );
-  return Object.fromEntries(entries) as SpriteSet;
+  ) as SpriteSet;
 }
 
 /** 同期的に使えるプレースホルダーだけのセット（読み込み完了前の描画用） */

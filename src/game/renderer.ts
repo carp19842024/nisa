@@ -320,18 +320,18 @@ export class Renderer {
       }
       case 'shock':
         drawSprite(ctx, sprite, 0, x, y + 2, 'bottom');
-        this.drawGripBar(game, x, y - 72);
+        this.drawGripBar(game, x, y - sprite.frameH - 8);
         break;
       case 'fall': {
         const f = 1 - game.fallTimer / 1.1;
         y = this.fallFromY + (GROUND_Y - this.fallFromY) * f * f;
-        drawSprite(ctx, sprite, 0, x, y - 32, 'center', f * Math.PI * 1.5);
+        drawSprite(ctx, sprite, 0, x, y - sprite.frameH / 2, 'center', f * Math.PI * 1.5);
         break;
       }
       case 'walk': {
         y = GROUND_Y;
         drawSprite(ctx, sprite, spriteFrame(sprite, time), x, y, 'bottom');
-        if (game.anxious) this.drawAnxious(x + 14, y - 70, time);
+        if (game.anxious) this.drawAnxious(x + 14, y - sprite.frameH - 6, time);
         break;
       }
       case 'victory': {
