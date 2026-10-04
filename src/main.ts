@@ -17,7 +17,7 @@ import { setupHoldButton } from './ui/hold';
 import { Hud } from './ui/hud';
 import { renderResult } from './ui/result';
 import { renderSetup } from './ui/setup';
-import { load, markDisclaimerSeen, setBgmOff, submitScore } from './ui/storage';
+import { load, markDisclaimerSeen, setBgmOn, submitScore } from './ui/storage';
 import { renderTitle } from './ui/title';
 
 type Screen = 'title' | 'disclaimer' | 'setup' | 'game' | 'result';
@@ -53,11 +53,11 @@ let allocation: Allocation = {
   invest: { ...CONFIG.money.defaultInvest },
   savePerMonth: CONFIG.money.monthlyBudget - totalInvest({ invest: CONFIG.money.defaultInvest, savePerMonth: 0 }),
 };
-const bgm = new Bgm(load().bgmOff !== true);
+const bgm = new Bgm(load().bgmOn ?? CONFIG.audio.defaultOn);
 
 function toggleBgm(): void {
   bgm.setEnabled(!bgm.enabled);
-  setBgmOff(!bgm.enabled);
+  setBgmOn(bgm.enabled);
   updateBgmButtons();
 }
 
@@ -102,11 +102,10 @@ function go(next: Screen): void {
   for (const [name, el] of Object.entries(screens)) show(el, name === next);
   hud.showGameUi(next === 'game');
   show(pauseOverlay, false);
-  if (next !== 'game') {
-    renderer.resetCamera();
-    // BGM はプレイ中だけ
-    bgm.stop();
-  }
+  if (next !== 'game') renderer.resetCamera();
+  // BGM：タイトル・注意事項・積立設定ではタイトル曲（画面を移っても続けて流す）、結果画面では流さない。プレイ中の曲は startGame で流す
+  if (next === 'title' || next === 'disclaimer' || next === 'setup') bgm.play('title');
+  else if (next === 'result') bgm.stop();
 
   if (next === 'title') {
     renderTitle(screens.title, {
@@ -216,7 +215,7 @@ function startGame(seed: number): void {
   );
   game.start();
   // 「はじめる」「もう一度」のクリックの中で呼ばれるので、自動再生の制限にかからない
-  bgm.start();
+  bgm.play('game', true);
 }
 
 async function share(res: GameResult): Promise<void> {
@@ -321,6 +320,8 @@ window.addEventListener('keyup', (e) => {
 
 $('pause-btn').addEventListener('click', () => setPaused(true));
 $('bgm-btn').addEventListener('click', toggleBgm);
+// ページを開いた直後は自動再生が止められるので、最初に画面を触ったときに鳴らし直す
+for (const type of ['pointerdown', 'keydown'] as const) document.addEventListener(type, () => bgm.kick(), true);
 $('bgm-btn').addEventListener('pointerdown', (e) => e.stopPropagation());
 $('pause-bgm-btn').addEventListener('click', toggleBgm);
 updateBgmButtons();
@@ -336,7 +337,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden && isRunning()) setPaused(true);
   // イベントのモーダル表示中などでも、裏で鳴りっぱなしにしない
   if (document.hidden) bgm.pause();
-  else if (screen === 'game' && game && !game.userPaused && !game.finished) bgm.resume();
+  else if (screen === 'game' ? game && !game.userPaused && !game.finished : screen !== 'result') bgm.resume();
 });
 
 // ダブルタップ拡大・ピンチ・長押しメニューの抑止

@@ -12,8 +12,8 @@ export interface SaveData {
   };
   /** 注意事項を一度読んだら、以降はスキップできる */
   seenDisclaimer?: boolean;
-  /** BGM を OFF にしている */
-  bgmOff?: boolean;
+  /** BGM を ON にしている（保存が無ければ config の初期値） */
+  bgmOn?: boolean;
 }
 
 /**
@@ -56,6 +56,6 @@ export function markDisclaimerSeen(): void {
   save({ ...load(), seenDisclaimer: true });
 }
 
-export function setBgmOff(off: boolean): void {
-  save({ ...load(), bgmOff: off });
+export function setBgmOn(on: boolean): void {
+  save({ ...load(), bgmOn: on });
 }

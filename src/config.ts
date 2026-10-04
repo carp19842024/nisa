@@ -327,9 +327,11 @@ export const CONFIG = {
   },
 
   audio: {
-    /** プレイ中の BGM（public/ からの相対パス） */
-    bgmFile: 'audio/bgm.mp3',
-    bgmVolume: 0.45,
+    /** BGM（public/ からの相対パス）。title はタイトル・注意事項・積立設定、game はプレイ中 */
+    files: { title: 'audio/bgm_title.mp3', game: 'audio/bgm.mp3' },
+    volume: { title: 0.4, game: 0.45 },
+    /** はじめて遊ぶときの BGM（false = OFF） */
+    defaultOn: false,
   },
 
   storageKey: 'shigamitsuke.v1',
