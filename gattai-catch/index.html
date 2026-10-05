@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>合体キャッチ</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #0b0f1a; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  /* 高さは 100dvh 基準（iOS のアドレスバーを考慮）。未対応ブラウザは 100vh */
+  #wrap {
+    position: fixed; left: 0; top: 0; width: 100%;
+    height: 100vh; height: 100dvh; box-sizing: border-box;
+    /* セーフエリアの内側だけにゲーム画面を置く（HUD がノッチにかからない） */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  #stage { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage"><canvas id="game"></canvas></div></div>
+<script>
+'use strict';
+
+/* =====================================================================
+ * 1. CONFIG — 調整値はすべてここ。遊んで調整するときはこのブロックだけ触る
+ * ===================================================================== */
+const CONFIG = {
+  W: 360, H: 640,                 // 論理解像度（9:16 固定）
+  maxDpr: 3,                      // Canvas 実ピクセルの倍率上限
+  dtMax: 0.05,                    // 1フレームの経過時間の上限（タブ復帰時の瞬間移動防止）
+
+  layout: {
+    hudBottom: 56,                // HUD: 0〜56
+    infoBottom: 96,               // 機体情報: 56〜96
+    spawnY: 96,                   // パーツ出現位置（上端）
+    bodyAreaTop: 460,             // 本体エリア: 460〜600
+    groundY: 600,                 // 地面: 600〜640
+    catchLineMinY: 420,           // 受け止めラインはこれより上に上がらない
+  },
+
+  body: {
+    margin: 24,                   // 画面端から内側に何px までしか動けないか
+    halfWidth: 28,                // 本体（台座）の半幅。移動範囲 = margin + halfWidth 〜
+    maxSpeed: 420,                // 本体の最大速度（px/秒）。段階が上がっても変えない
+    accelTime: 0.08,              // キー／タップ移動で最大速度に達するまでの秒数
+    baseStackH: 24,               // 台座の高さ
+  },
+
+  part: { w: 48, h: 40 },         // 当たり範囲（描画サイズに関係なくこれで判定）
+  connectorWidth: 40,             // 接続口の幅
+  judge: { justDx: 8, catchExtra: 12 },
+
+  spawn: {
+    maxParts: 4,                  // 画面内に同時に存在できるパーツ数
+    reachFactor: 0.8,             // 出現 x の制限：本体最大速度 × 落下時間 × この値
+    pityAfterWrong: 3,            // 不正解がこの数続いたら次は必ず正解
+    minCorrectRate: 0.40,         // 正解率の下限
+    firstDelay: 0.5,              // 機体の合体開始から最初のパーツまでの秒数
+  },
+
+  // 段階テーブル（完成機数で段階が上がる）
+  stages: [
+    { minDone: 0,  speed: 140, interval: 1.10, correct: 0.60, dummy: false, wobble: false, pair: false },
+    { minDone: 1,  speed: 170, interval: 0.95, correct: 0.55, dummy: false, wobble: false, pair: false },
+    { minDone: 3,  speed: 200, interval: 0.85, correct: 0.50, dummy: true,  wobble: false, pair: false },
+    { minDone: 5,  speed: 230, interval: 0.75, correct: 0.45, dummy: true,  wobble: true,  pair: false },
+    { minDone: 7,  speed: 260, interval: 0.68, correct: 0.42, dummy: true,  wobble: true,  pair: true  },
+    { minDone: 10, speed: 290, interval: 0.60, correct: 0.40, dummy: true,  wobble: true,  pair: true  },
+  ],
+  lastStage: { speedPerRobot: 10, speedMax: 360, intervalPerRobot: 0.01, intervalMin: 0.50 },
+  comboSpeed: { perCombo: 0.01, cap: 20 },   // 落下速度 × (1 + min(コンボ, cap) × perCombo)
+
+  gimmick: {
+    dummyRate: 0.25,              // 不正解のうちダミーにする割合
+    dummyCrackRate: 0.5,          // ダミーのうちヒビ入りにする割合（残りは他機体の配色）
+    wobbleRate: 0.30, wobbleAmp: 40, wobblePeriod: 1.6,
+    pairRate: 0.20, pairGap: 140,
+    notices: {                    // ギミックが初めて出る段階の最初に出す注意書き（段階番号は1始まり）
+      3: 'ニセモノに注意！',
+      4: 'ゆれ落下に注意！',
+      5: '2個同時に来るぞ！',
+    },
+  },
+
+  lives: 3,
+
+  score: {
+    catch: 100, just: 250,
+    completePerPart: 1000,
+    noMissBonus: 0.5,             // ノーミス完成で完成点に +50%
+    speedPerSec: 100,             // スピード完成：(基準秒数 − 実秒数) × これ
+    speedFactor: 2.5,             // 基準秒数 = パーツ数 × 出現間隔 × これ
+    comboStep: 5, comboMulStep: 0.5, comboMulMax: 4.0,
+  },
+
+  timing: {
+    complete: 1.2,                // 完成演出
+    rise: 0.4,                    // 飛び去り＋次のベースのせり上がり
+    collapse: 1.0,                // ゲームオーバーの崩れる演出
+    resultLock: 0.8,              // 結果画面が出てから入力を受け付けない秒数
+    hitstop: 0.05,                // ジャスト時のみ
+    snap: 0.12, just: 0.2, misfit: 0.4, miss: 0.3, comboPop: 0.3,
+    floatText: 0.6, notice: 1.0,
+  },
+
+  fx: { justShake: 4, sparks: 8 },
+  input: { dragThreshold: 8, dragSensitivity: 1.2 },
+
+  // 段階ごとの背景（夕焼け → 夜）[上, 下, 格子線]
+  bgColors: [
+    ['#f7b267', '#f4845f', 'rgba(255,255,255,0.18)'],
+    ['#f08a5d', '#b83b5e', 'rgba(255,255,255,0.16)'],
+    ['#b83b5e', '#6a2c70', 'rgba(255,255,255,0.14)'],
+    ['#6a2c70', '#3b1f5c', 'rgba(255,255,255,0.12)'],
+    ['#3b1f5c', '#1d1b4b', 'rgba(160,180,255,0.12)'],
+    ['#151436', '#090a1f', 'rgba(140,160,255,0.10)'],
+  ],
+
+  storageKeys: { best: 'gattai-catch:best', mute: 'gattai-catch:mute', howto: 'gattai-catch:howto' },
+};
+
+/* =====================================================================
+ * 2. ROBOTS / PART_TYPES — 機体とパーツのデータ。機体は配列に足すだけで増やせる
+ * ===================================================================== */
+// shape: 接続口と落下パーツの印の形 / color: 識別色（印と接続口にだけ使う）
+// stackH: 本体に積んだときの高さ / bounds: 描画の上端・下端（落下中の中央寄せ用）/ fallScale: 落下中の描画倍率
+const PART_TYPES = {
+  leg:  { name: '脚',           shape: 'square',    color: '#3b82f6', stackH: 52, bounds: [-52, 0],  fallScale: 0.85 },
+  body: { name: '胴',           shape: 'triangle',  color: '#ef4444', stackH: 52, bounds: [-52, 0],  fallScale: 0.85 },
+  arm:  { name: '腕',           shape: 'circle',    color: '#facc15', stackH: 24, bounds: [-24, 50], fallScale: 0.6 },
+  wing: { name: '翼',           shape: 'trapezoid', color: '#22c55e', stackH: 22, bounds: [-40, 0],  fallScale: 0.6 },
+  back: { name: '背中ユニット', shape: 'hexagon',   color: '#a855f7', stackH: 22, bounds: [-38, 0],  fallScale: 0.8 },
+  head: { name: '頭',           shape: 'star',      color: '#f8fafc', stackH: 40, bounds: [-48, 0],  fallScale: 0.9 },
+};
+const PART_IDS = Object.keys(PART_TYPES);
+
+// pose: 完成演出のポーズ（guard / punch / fly / cannon / zenith）
+const ROBOTS = [
+  { id: 'ground-guarder', name: 'グランドガーダー', sequence: ['leg', 'body', 'head'],
+    palette: { main: '#3a6ea5', sub: '#d9e2ec', accent: '#f2a541' }, pose: 'guard' },
+  { id: 'steel-knuckle', name: 'スチールナックル', sequence: ['leg', 'body', 'arm', 'head'],
+    palette: { main: '#8d99ae', sub: '#2b2d42', accent: '#ef233c' }, pose: 'punch' },
+  { id: 'sky-raven', name: 'スカイレイヴン', sequence: ['leg', 'body', 'wing', 'head'],
+    palette: { main: '#2e2a4f', sub: '#9aa6c4', accent: '#3fd0d4' }, pose: 'fly' },
+  { id: 'burst-fort', name: 'バーストフォート', sequence: ['leg', 'body', 'arm', 'back', 'head'],
+    palette: { main: '#8a6a1f', sub: '#ecdcb0', accent: '#e85d3a' }, pose: 'cannon' },
+  { id: 'tempest-wing', name: 'テンペストウィング', sequence: ['leg', 'body', 'wing', 'arm', 'head'],
+    palette: { main: '#127369', sub: '#c9f2ea', accent: '#f472b6' }, pose: 'fly' },
+  { id: 'grand-zenith', name: 'グランドゼニス', sequence: ['leg', 'body', 'arm', 'wing', 'back', 'head'],
+    palette: { main: '#eef0f4', sub: '#c9a227', accent: '#d64545' }, pose: 'zenith' },
+];
+
+/* =====================================================================
+ * ユーティリティ / 保存
+ * ===================================================================== */
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const easeOut = (t) => 1 - (1 - t) * (1 - t);
+const easeIn = (t) => t * t;
+
+// localStorage は使えない環境（プライベートモード等）があるので必ず try/catch
+const Storage = {
+  get(key, fallback) {
+    try {
+      const v = window.localStorage.getItem(key);
+      return v === null ? fallback : JSON.parse(v);
+    } catch (e) { return fallback; }
+  },
+  set(key, value) {
+    try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 保存できなくても続行 */ }
+  },
+};
+
+let reducedMotion = false;
+try {
+  const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+  reducedMotion = mq.matches;
+  const onMq = () => { reducedMotion = mq.matches; };
+  if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq);
+} catch (e) { /* 未対応ブラウザ */ }
+
+/* =====================================================================
+ * 画面サイズ（論理 360×640 を 9:16 のまま最大表示）
+ * ===================================================================== */
+const Screen = {
+  canvas: null, ctx: null, stage: null, scale: 1,
+  init() {
+    this.canvas = document.getElementById('game');
+    this.ctx = this.canvas.getContext('2d');
+    this.stage = document.getElementById('stage');
+    const onResize = () => this.resize();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 200); });
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+    this.resize();
+  },
+  resize() {
+    const r = this.stage.getBoundingClientRect();
+    const availW = Math.max(1, r.width), availH = Math.max(1, r.height);
+    let cssW = Math.min(availW, availH * CONFIG.W / CONFIG.H);
+    let cssH = cssW * CONFIG.H / CONFIG.W;
+    cssW = Math.floor(cssW); cssH = Math.floor(cssH);
+    const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.maxDpr);
+    this.canvas.style.width = cssW + 'px';
+    this.canvas.style.height = cssH + 'px';
+    this.canvas.width = Math.max(1, Math.round(cssW * dpr));
+    this.canvas.height = Math.max(1, Math.round(cssH * dpr));
+    this.scale = this.canvas.width / CONFIG.W;
+  },
+  // 画面座標 → 論理座標（表示サイズに関係なく判定がずれないよう、毎回実寸から換算）
+  toLogical(clientX, clientY) {
+    const r = this.canvas.getBoundingClientRect();
+    return { x: (clientX - r.left) * CONFIG.W / r.width, y: (clientY - r.top) * CONFIG.H / r.height };
+  },
+};
+
+/* =====================================================================
+ * 3. Input — Pointer Events とキーボードをまとめ、「目標x」か「移動方向」を返す
+ * ===================================================================== */
+const Input = {
+  keyLeft: false, keyRight: false,
+  ptr: null,              // 有効なポインタは最初の1本だけ
+  handlers: null,
+  init(canvas, handlers) {
+    this.handlers = handlers;
+    canvas.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handlers.onGesture();
+      const p = Screen.toLogical(e.clientX, e.clientY);
+      if (this.ptr) return;                       // マルチタッチは最初の1本だけ
+      if (handlers.onTap(p.x, p.y)) return;       // ボタンや画面遷移で使われたタップは移動に使わない
+      if (!handlers.acceptsMove()) return;
+      this.ptr = {
+        id: e.pointerId, sx: p.x, sy: p.y, x: p.x, y: p.y,
+        drag: false, side: p.x < CONFIG.W / 2 ? -1 : 1, anchorBodyX: null,
+      };
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!this.ptr || e.pointerId !== this.ptr.id) return;
+      const p = Screen.toLogical(e.clientX, e.clientY);
+      this.ptr.x = p.x; this.ptr.y = p.y;
+      if (!this.ptr.drag && Math.hypot(p.x - this.ptr.sx, p.y - this.ptr.sy) >= CONFIG.input.dragThreshold) {
+        this.ptr.drag = true;   // 以降は押した位置からの相対移動
+      }
+    });
+    const end = (e) => { if (this.ptr && e.pointerId === this.ptr.id) this.ptr = null; };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('lostpointercapture', end);
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    // iOS のピンチ・ダブルタップ拡大を抑止
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+    document.addEventListener('dblclick', (e) => e.preventDefault());
+
+    window.addEventListener('keydown', (e) => {
+      const k = e.key;
+      if (k === 'ArrowLeft' || k === 'a' || k === 'A') { this.keyLeft = true; e.preventDefault(); }
+      else if (k === 'ArrowRight' || k === 'd' || k === 'D') { this.keyRight = true; e.preventDefault(); }
+      else if (k === ' ' || k === 'Enter') { e.preventDefault(); if (!e.repeat) { handlers.onGesture(); handlers.onConfirm(); } }
+      else if (k === 'Escape' || k === 'p' || k === 'P') { e.preventDefault(); if (!e.repeat) handlers.onPauseKey(); }
+      else if (k === 'm' || k === 'M') { if (!e.repeat) { handlers.onGesture(); handlers.onMuteKey(); } }
+    });
+    window.addEventListener('keyup', (e) => {
+      const k = e.key;
+      if (k === 'ArrowLeft' || k === 'a' || k === 'A') this.keyLeft = false;
+      else if (k === 'ArrowRight' || k === 'd' || k === 'D') this.keyRight = false;
+    });
+    window.addEventListener('blur', () => this.reset());
+  },
+  // { targetX: number|null, dir: -1|0|1 }
+  read(bodyX) {
+    const p = this.ptr;
+    if (p && p.drag) {
+      if (p.anchorBodyX === null) p.anchorBodyX = bodyX;
+      return { targetX: p.anchorBodyX + (p.x - p.sx) * CONFIG.input.dragSensitivity, dir: 0 };
+    }
+    if (p) return { targetX: null, dir: p.side };
+    return { targetX: null, dir: (this.keyRight ? 1 : 0) - (this.keyLeft ? 1 : 0) };
+  },
+  reset() { this.ptr = null; this.keyLeft = false; this.keyRight = false; },
+};
+
+/* =====================================================================
+ * 4. Audio — 効果音（段階3で実装）
+ * ===================================================================== */
+const AudioFx = {
+  muted: false,
+  unlock() {},
+  play(name, opt) {},
+  setMuted(m) { this.muted = m; },
+};
+
+/* =====================================================================
+ * 5. Game — 状態機械、出現制御、判定、スコア（段階1：最小構成）
+ * ===================================================================== */
+const Game = {
+  state: 'play',
+  time: 0,
+  robotIndex: 0, done: 0,
+  attached: [],
+  parts: [],
+  bodyX: CONFIG.W / 2, bodyVel: 0,
+  spawnTimer: 0,
+  lives: CONFIG.lives, score: 0, combo: 0,
+
+  get robot() { return ROBOTS[this.robotIndex % ROBOTS.length]; },
+  get needed() { return this.robot.sequence[this.attached.length] || null; },
+  get bodyMinX() { return CONFIG.body.margin + CONFIG.body.halfWidth; },
+  get bodyMaxX() { return CONFIG.W - CONFIG.body.margin - CONFIG.body.halfWidth; },
+
+  // 本体の積み上げ高さと縮小率。受け止めラインは y=catchLineMinY より上に行かない
+  stackHeight(list) {
+    let h = CONFIG.body.baseStackH;
+    for (const t of list) h += PART_TYPES[t].stackH;
+    return h;
+  },
+  bodyScale(list) {
+    const room = CONFIG.layout.groundY - CONFIG.layout.catchLineMinY;
+    return Math.min(1, room / this.stackHeight(list));
+  },
+  get catchLineY() {
+    const s = this.bodyScale(this.attached);
+    return CONFIG.layout.groundY - this.stackHeight(this.attached) * s;
+  },
+
+  start() {
+    this.state = 'play';
+    this.robotIndex = 0; this.done = 0;
+    this.attached = []; this.parts = [];
+    this.bodyX = CONFIG.W / 2; this.bodyVel = 0;
+    this.spawnTimer = CONFIG.spawn.firstDelay;
+    this.lives = CONFIG.lives; this.score = 0; this.combo = 0;
+  },
+
+  update(dt) {
+    this.time += dt;
+    if (this.state !== 'play') return;
+    this.updateBody(dt);
+    const st = CONFIG.stages[0];
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0 && this.parts.length < CONFIG.spawn.maxParts) {
+      this.spawnTimer += st.interval;
+      const type = Math.random() < st.correct ? this.needed : pick(PART_IDS.filter(t => t !== this.needed));
+      this.parts.push({ type, x: rand(this.bodyMinX, this.bodyMaxX), y: CONFIG.layout.spawnY, judged: false, isDummy: false });
+    }
+    const line = this.catchLineY;
+    for (const p of this.parts) {
+      p.y += st.speed * dt;
+      const bottom = p.y + CONFIG.part.h;
+      if (!p.judged && bottom >= line) {
+        p.judged = true;
+        const dx = Math.abs(p.x - this.bodyX);
+        if (dx <= CONFIG.connectorWidth / 2 + CONFIG.judge.catchExtra && p.type === this.needed) {
+          p.dead = true;
+          this.attached.push(p.type);
+          if (this.attached.length === this.robot.sequence.length) {
+            this.robotIndex++; this.done++; this.attached = []; this.parts = [];
+            return;
+          }
+        }
+      }
+      if (bottom >= CONFIG.layout.groundY) p.dead = true;
+    }
+    this.parts = this.parts.filter(p => !p.dead);
+  },
+
+  updateBody(dt) {
+    const inp = Input.read(this.bodyX);
+    const b = CONFIG.body;
+    if (inp.targetX !== null) {
+      // ドラッグ：補間なしでそのフレームに反映
+      this.bodyX = clamp(inp.targetX, this.bodyMinX, this.bodyMaxX);
+      this.bodyVel = 0;
+    } else if (inp.dir !== 0) {
+      // キー／タップ：0.08秒で最大速度まで加速
+      if (Math.sign(this.bodyVel) !== inp.dir) this.bodyVel = 0;
+      this.bodyVel = clamp(this.bodyVel + inp.dir * (b.maxSpeed / b.accelTime) * dt, -b.maxSpeed, b.maxSpeed);
+      this.bodyX = clamp(this.bodyX + this.bodyVel * dt, this.bodyMinX, this.bodyMaxX);
+    } else {
+      this.bodyVel = 0;   // 離した瞬間に停止（滑らない）
+    }
+  },
+
+  // 入力ハンドラ
+  onTap(x, y) { return false; },
+  acceptsMove() { return this.state === 'play'; },
+  onConfirm() {},
+  onPauseKey() {},
+  onMuteKey() {},
+};
+
+/* =====================================================================
+ * 6. Render — drawPart をはじめとする描画
+ * ===================================================================== */
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function poly(ctx, pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+  ctx.closePath();
+}
+const OUTLINE = 'rgba(12,16,28,0.92)';
+function fillStroke(ctx, fill) {
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = OUTLINE; ctx.lineWidth = 2; ctx.stroke();
+}
+
+// 接続口と印の形（形と色の2系統で見分けられるように）
+function drawShape(ctx, shape, x, y, r) {
+  ctx.beginPath();
+  switch (shape) {
+    case 'square': ctx.rect(x - r * 0.8, y - r * 0.8, r * 1.6, r * 1.6); break;
+    case 'triangle': ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.95, y + r * 0.75); ctx.lineTo(x - r * 0.95, y + r * 0.75); ctx.closePath(); break;
+    case 'circle': ctx.arc(x, y, r * 0.85, 0, Math.PI * 2); break;
+    case 'trapezoid': ctx.moveTo(x - r * 0.5, y - r * 0.7); ctx.lineTo(x + r * 0.5, y - r * 0.7); ctx.lineTo(x + r, y + r * 0.7); ctx.lineTo(x - r, y + r * 0.7); ctx.closePath(); break;
+    case 'hexagon':
+      for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i; const px = x + Math.cos(a) * r * 0.92, py = y + Math.sin(a) * r * 0.92; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+      ctx.closePath(); break;
+    case 'star':
+      for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + Math.PI / 5 * i; const rr = i % 2 ? r * 0.45 : r; const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+      ctx.closePath(); break;
+  }
+}
+
+// パーツ種別ごとの描画関数。原点は「その段の底辺の中央」、上が負。
+// ドット絵に差し替えるときは、ここ（または drawPart）だけを変えればよい
+const PART_DRAWERS = {
+  base(ctx, p) {
+    poly(ctx, [-36, 0, 36, 0, 30, -16, -30, -16]); fillStroke(ctx, '#3b4252');
+    roundRect(ctx, -30, -24, 60, 9, 3); fillStroke(ctx, '#5c6680');
+    ctx.save(); poly(ctx, [-36, 0, 36, 0, 30, -16, -30, -16]); ctx.clip();
+    ctx.fillStyle = '#f2c94c';
+    for (let i = -48; i < 48; i += 12) { poly(ctx, [i, -4, i + 6, -4, i + 12, -12, i + 6, -12]); ctx.fill(); }
+    ctx.restore();
+    ctx.fillStyle = '#1b1f2a';
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * 24, -1, 4, 0, Math.PI * 2); ctx.fill(); }
+  },
+  leg(ctx, p) {
+    roundRect(ctx, -24, -52, 48, 12, 3); fillStroke(ctx, p.sub);
+    for (const s of [-1, 1]) {
+      roundRect(ctx, s * 13 - 8, -42, 16, 20, 3); fillStroke(ctx, p.main);
+      roundRect(ctx, s * 13 - 9, -22, 18, 14, 3); fillStroke(ctx, p.main);
+      ctx.beginPath(); ctx.arc(s * 13, -22, 5, 0, Math.PI * 2); fillStroke(ctx, p.sub);
+      roundRect(ctx, s * 13 - 13 + s * 2, -10, 26, 10, 3); fillStroke(ctx, p.accent);
+    }
+  },
+  body(ctx, p, o) {
+    roundRect(ctx, -18, -10, 36, 10, 3); fillStroke(ctx, p.sub);
+    poly(ctx, [-30, -52, 30, -52, 22, -8, -22, -8]); fillStroke(ctx, p.main);
+    poly(ctx, [-20, -47, 20, -47, 14, -22, -14, -22]); fillStroke(ctx, p.sub);
+    ctx.beginPath(); ctx.arc(0, -33, 6, 0, Math.PI * 2);
+    fillStroke(ctx, o.glow ? '#ffffff' : p.accent);
+    if (o.glow) { ctx.beginPath(); ctx.arc(0, -33, 11, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill(); }
+    ctx.strokeStyle = OUTLINE; ctx.lineWidth = 1.5;
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(s * 10, -16); ctx.lineTo(s * 18, -16); ctx.stroke(); }
+  },
+  arm(ctx, p, o) {
+    roundRect(ctx, -26, -16, 52, 12, 4); fillStroke(ctx, p.sub);
+    for (const s of [-1, 1]) {
+      const raise = (s < 0 ? o.armRaiseL : o.armRaiseR) || 0;
+      ctx.save();
+      ctx.translate(s * 34, -12);
+      ctx.rotate(-s * raise);
+      roundRect(ctx, -7, 4, 14, 26, 3); fillStroke(ctx, p.sub);
+      roundRect(ctx, -8, 28, 16, 20, 3); fillStroke(ctx, p.main);
+      ctx.beginPath(); ctx.arc(0, 52, 8, 0, Math.PI * 2); fillStroke(ctx, p.accent);
+      ctx.restore();
+      roundRect(ctx, s * 34 - 12, -24, 24, 20, 6); fillStroke(ctx, p.main);
+    }
+  },
+  wing(ctx, p, o) {
+    const flap = o.flap || 0;
+    for (const s of [-1, 1]) {
+      ctx.save();
+      ctx.translate(s * 14, -10);
+      ctx.rotate(-s * flap);
+      poly(ctx, [0, -4, s * 50, -30, s * 56, -20, s * 26, 4, 0, 6]); fillStroke(ctx, p.main);
+      ctx.strokeStyle = p.accent; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(s * 12, -2); ctx.lineTo(s * 46, -22); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(s * 12, 3); ctx.lineTo(s * 36, -8); ctx.stroke();
+      ctx.restore();
+    }
+    roundRect(ctx, -16, -20, 32, 18, 5); fillStroke(ctx, p.sub);
+  },
+  back(ctx, p, o) {
+    for (const s of [-1, 1]) {
+      if (o.flame) {
+        const f = 8 + Math.sin(o.t * 40 + s) * 4;
+        poly(ctx, [s * 26 - 5, -4, s * 26 + 5, -4, s * 26, f + 6]);
+        ctx.fillStyle = '#ffd166'; ctx.fill();
+      }
+      roundRect(ctx, s * 26 - 6, -36, 12, 32, 3); fillStroke(ctx, p.sub);
+      roundRect(ctx, s * 26 - 5, -40, 10, 7, 2); fillStroke(ctx, p.accent);
+    }
+    roundRect(ctx, -20, -21, 40, 19, 4); fillStroke(ctx, p.main);
+    ctx.fillStyle = p.accent;
+    roundRect(ctx, -10, -15, 20, 6, 2); ctx.fill();
+  },
+  head(ctx, p, o) {
+    roundRect(ctx, -8, -9, 16, 9, 2); fillStroke(ctx, p.sub);
+    roundRect(ctx, -17, -38, 34, 30, 8); fillStroke(ctx, p.main);
+    roundRect(ctx, -12, -28, 24, 16, 4); fillStroke(ctx, p.sub);
+    roundRect(ctx, -11, -26, 22, 6, 3); fillStroke(ctx, '#11151f');
+    ctx.fillStyle = o.glow ? '#ffffff' : p.accent;
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * 5, -23, 2.2, 0, Math.PI * 2); ctx.fill(); }
+    ctx.strokeStyle = p.accent; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(0, -36); ctx.lineTo(s * 15, -48); ctx.stroke(); }
+    ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.arc(0, -36, 3.5, 0, Math.PI * 2); fillStroke(ctx, p.accent);
+  },
+};
+
+// ダミー（壊れたパーツ）のヒビ
+function drawCrack(ctx, type) {
+  const [top, bottom] = PART_TYPES[type].bounds;
+  const h = bottom - top;
+  ctx.lineJoin = 'round';
+  for (const [w, c] of [[4, '#0b0d14'], [1.5, 'rgba(255,255,255,0.7)']]) {
+    ctx.strokeStyle = c; ctx.lineWidth = w;
+    ctx.beginPath();
+    ctx.moveTo(-18, top + h * 0.15); ctx.lineTo(-6, top + h * 0.35); ctx.lineTo(-12, top + h * 0.5);
+    ctx.lineTo(4, top + h * 0.7); ctx.lineTo(-2, top + h * 0.95);
+    ctx.moveTo(-6, top + h * 0.35); ctx.lineTo(14, top + h * 0.3); ctx.lineTo(20, top + h * 0.45);
+    ctx.stroke();
+  }
+}
+
+// パーツ描画の入口。絵を差し替えるときはこの関数だけを変えればよい
+// (x, y) はその段の底辺の中央。opts: { crack, glow, armRaiseL, armRaiseR, flap, flame, t }
+function drawPart(ctx, type, palette, x, y, scale, opts) {
+  const o = opts || {};
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  PART_DRAWERS[type](ctx, palette, o);
+  if (o.crack) drawCrack(ctx, type);
+  ctx.restore();
+}
+
+const Render = {
+  gridOffset: 0,
+
+  draw(ctx, g) {
+    ctx.setTransform(Screen.scale, 0, 0, Screen.scale, 0, 0);
+    this.drawBackground(ctx, g);
+    this.drawGround(ctx);
+    this.drawBody(ctx, g);
+    for (const p of g.parts) this.drawFallingPart(ctx, g, p);
+    this.drawHud(ctx, g);
+    if (DEBUG) this.drawDebug(ctx, g);
+  },
+
+  drawBackground(ctx, g) {
+    const c = CONFIG.bgColors[0];
+    const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
+    grad.addColorStop(0, c[0]); grad.addColorStop(1, c[1]);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+    // 縦に流れる格子線
+    this.gridOffset = (g.time * 30) % 40;
+    ctx.strokeStyle = c[2]; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 20; x < CONFIG.W; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, CONFIG.layout.groundY); }
+    for (let y = this.gridOffset - 40; y < CONFIG.layout.groundY; y += 40) { ctx.moveTo(0, y); ctx.lineTo(CONFIG.W, y); }
+    ctx.stroke();
+  },
+
+  drawGround(ctx) {
+    const gy = CONFIG.layout.groundY;
+    ctx.fillStyle = '#20232f';
+    ctx.fillRect(0, gy, CONFIG.W, CONFIG.H - gy);
+    ctx.fillStyle = '#3a3f52';
+    ctx.fillRect(0, gy, CONFIG.W, 4);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (let x = 0; x < CONFIG.W; x += 24) ctx.fillRect(x, gy + 10, 12, 3);
+  },
+
+  // 合体中の本体：台座＋取り付け済みパーツを積み上げ、最上段に次の接続口
+  drawBody(ctx, g) {
+    const pal = g.robot.palette;
+    const s = g.bodyScale(g.attached);
+    let y = CONFIG.layout.groundY;
+    drawPart(ctx, 'base', pal, g.bodyX, y, s);
+    y -= CONFIG.body.baseStackH * s;
+    for (const t of g.attached) {
+      drawPart(ctx, t, pal, g.bodyX, y, s);
+      y -= PART_TYPES[t].stackH * s;
+    }
+    if (g.needed) this.drawConnector(ctx, g.needed, g.bodyX, y, g.time);
+  },
+
+  drawConnector(ctx, type, x, y, time) {
+    const pt = PART_TYPES[type];
+    const half = CONFIG.connectorWidth / 2;
+    roundRect(ctx, x - half, y - 5, half * 2, 8, 3);
+    fillStroke(ctx, '#1b2130');
+    const blink = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(time * Math.PI * 2 * 2.5));
+    ctx.globalAlpha = blink;
+    ctx.fillStyle = pt.color;
+    ctx.fillRect(x - half + 3, y - 3, half * 2 - 6, 4);
+    drawShape(ctx, pt.shape, x, y - 15, 9);
+    ctx.fillStyle = pt.color; ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = OUTLINE; ctx.lineWidth = 2; ctx.stroke();
+  },
+
+  // 落下中のパーツ：当たり範囲（48×40）の中に収まるように描き、右上に識別の印
+  drawFallingPart(ctx, g, p) {
+    const pt = PART_TYPES[p.type];
+    const cx = p.x, cy = p.y + CONFIG.part.h / 2;
+    const sc = pt.fallScale;
+    const mid = (pt.bounds[0] + pt.bounds[1]) / 2;
+    drawPart(ctx, p.type, p.palette || g.robot.palette, cx, cy - mid * sc, sc, { crack: p.crack });
+    this.drawMark(ctx, p.type, cx + 20, p.y + 4);
+  },
+
+  drawMark(ctx, type, x, y) {
+    const pt = PART_TYPES[type];
+    ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(12,16,28,0.85)'; ctx.fill();
+    drawShape(ctx, pt.shape, x, y, 7);
+    ctx.fillStyle = pt.color; ctx.fill();
+  },
+
+  drawHud(ctx, g) {
+    ctx.fillStyle = 'rgba(10,12,24,0.55)';
+    ctx.fillRect(0, 0, CONFIG.W, CONFIG.layout.infoBottom);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.fillText(String(g.score), 12, 28);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillText(g.robot.name, 12, 76);
+    // 進捗アイコン列
+    const seq = g.robot.sequence;
+    for (let i = 0; i < seq.length; i++) {
+      const x = CONFIG.W - 16 - (seq.length - 1 - i) * 26, y = 76;
+      const pt = PART_TYPES[seq[i]];
+      const isDone = i < g.attached.length, isNext = i === g.attached.length;
+      ctx.globalAlpha = isDone ? 1 : isNext ? (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(g.time * Math.PI * 5))) : 0.25;
+      drawShape(ctx, pt.shape, x, y, 9);
+      ctx.fillStyle = pt.color; ctx.fill();
+      ctx.strokeStyle = OUTLINE; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  },
+
+  drawDebug(ctx, g) {
+    ctx.strokeStyle = '#0ff'; ctx.lineWidth = 1;
+    for (const p of g.parts) ctx.strokeRect(p.x - CONFIG.part.w / 2, p.y, CONFIG.part.w, CONFIG.part.h);
+    const ly = g.catchLineY;
+    ctx.strokeStyle = '#f0f';
+    ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(CONFIG.W, ly); ctx.stroke();
+    const tol = CONFIG.connectorWidth / 2 + CONFIG.judge.catchExtra;
+    ctx.strokeStyle = '#ff0';
+    ctx.strokeRect(g.bodyX - tol, ly - 4, tol * 2, 8);
+  },
+};
+
+/* =====================================================================
+ * 7. メインループ — dt ベース、dt は CONFIG.dtMax で頭打ち
+ * ===================================================================== */
+const DEBUG = /[?&]debug\b/.test(location.search);
+let lastTs = null;
+function frame(ts) {
+  if (lastTs === null) lastTs = ts;
+  const dt = Math.min((ts - lastTs) / 1000, CONFIG.dtMax);
+  lastTs = ts;
+  Game.update(dt);
+  Render.draw(Screen.ctx, Game);
+  requestAnimationFrame(frame);
+}
+
+Screen.init();
+Input.init(Screen.canvas, {
+  onGesture: () => AudioFx.unlock(),
+  onTap: (x, y) => Game.onTap(x, y),
+  acceptsMove: () => Game.acceptsMove(),
+  onConfirm: () => Game.onConfirm(),
+  onPauseKey: () => Game.onPauseKey(),
+  onMuteKey: () => Game.onMuteKey(),
+});
+Game.start();
+requestAnimationFrame(frame);
+
+// テスト・デバッグ用の参照
+window.GattaiCatch = { CONFIG, ROBOTS, PART_TYPES, Game, Input, Render };
+</script>
+</body>
+</html>
