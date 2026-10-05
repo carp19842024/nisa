@@ -303,17 +303,52 @@ const AudioFx = {
 };
 
 /* =====================================================================
- * 5. Game — 状態機械、出現制御、判定、スコア（段階1：最小構成）
+ * 5. Game — 状態機械（title / howto / play / complete / paused / gameover）、出現制御、判定、スコア
  * ===================================================================== */
+// 画面上のボタン（論理座標）。Game の当たり判定と Render の描画で共用
+const UI = {
+  mute:       { x: 284, y: 12, w: 32, h: 32 },
+  pause:      { x: 320, y: 12, w: 32, h: 32 },
+  titleHowto: { x: 110, y: 520, w: 140, h: 40 },
+  skip:       { x: 276, y: 16, w: 72, h: 32 },
+  resume:     { x: 90, y: 300, w: 180, h: 52 },
+  pauseTitle: { x: 90, y: 370, w: 180, h: 52 },
+  retry:      { x: 40, y: 500, w: 130, h: 56 },
+  toTitle:    { x: 190, y: 500, w: 130, h: 56 },
+};
+const hit = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+const HOWTO_PAGES = 3;
+
 const Game = {
-  state: 'play',
-  time: 0,
+  state: 'title', prevState: null,
+  time: 0,                      // 演出用の時計（一時停止中も進む）
+  best: { score: 0, robots: 0 },
+  howtoSeen: false, howtoPage: 0, howtoFromTitle: false,
+
+  // ---- プレイ中の状態 ----
   robotIndex: 0, done: 0,
-  attached: [],
-  parts: [],
+  attached: [], parts: [],
   bodyX: CONFIG.W / 2, bodyVel: 0,
-  spawnTimer: 0,
-  lives: CONFIG.lives, score: 0, combo: 0,
+  spawnTimer: 0, wrongStreak: 0,
+  lives: CONFIG.lives, score: 0, combo: 0, maxCombo: 0,
+  robotTime: 0, robotClean: true,
+  st: null, stageNo: 1,
+  phase: 'normal', phaseT: 0,   // play 中の小区分：normal / rise（次の機体のせり上がり）
+  hitstop: 0,
+  completeT: 0, completeInfo: null, flyAway: null,
+  goT: 0, result: null,
+  shownNotices: {}, notice: null,
+  stats: { spawned: 0, correct: 0, maxWrongStreak: 0 },   // 検証用
+
+  // ---- 演出の状態（Render が読む）----
+  fx: null,
+  resetFx() {
+    this.fx = {
+      particles: [], floats: [], rings: [], debris: [],
+      shakeT: 0, flashT: 0, bodyFlashT: 0, justT: 0, comboPopT: 0,
+      snap: null, lifeBreak: [], missBounce: [],
+    };
+  },
 
   get robot() { return ROBOTS[this.robotIndex % ROBOTS.length]; },
   get needed() { return this.robot.sequence[this.attached.length] || null; },
@@ -331,49 +366,136 @@ const Game = {
     return Math.min(1, room / this.stackHeight(list));
   },
   get catchLineY() {
-    const s = this.bodyScale(this.attached);
-    return CONFIG.layout.groundY - this.stackHeight(this.attached) * s;
+    return CONFIG.layout.groundY - this.stackHeight(this.attached) * this.bodyScale(this.attached);
   },
 
+  // ---- 難易度 ----
+  stageIndexFor(done) {
+    let idx = 0;
+    CONFIG.stages.forEach((s, i) => { if (done >= s.minDone) idx = i; });
+    return idx;
+  },
+  stageParams(done) {
+    const idx = this.stageIndexFor(done);
+    const s = Object.assign({}, CONFIG.stages[idx]);
+    if (idx === CONFIG.stages.length - 1) {
+      const extra = done - s.minDone, L = CONFIG.lastStage;
+      s.speed = Math.min(L.speedMax, s.speed + extra * L.speedPerRobot);
+      s.interval = Math.max(L.intervalMin, s.interval - extra * L.intervalPerRobot);
+    }
+    s.no = idx + 1;
+    return s;
+  },
+  get comboSpeedMul() {
+    const c = CONFIG.comboSpeed;
+    return 1 + Math.min(this.combo, c.cap) * c.perCombo;
+  },
+  get comboScoreMul() {
+    const s = CONFIG.score;
+    return Math.min(s.comboMulMax, 1 + Math.floor(this.combo / s.comboStep) * s.comboMulStep);
+  },
+
+  // ---- 状態遷移 ----
+  init() {
+    const b = Storage.get(CONFIG.storageKeys.best, null);
+    if (b && typeof b.score === 'number') this.best = { score: b.score, robots: b.robots | 0 };
+    this.howtoSeen = !!Storage.get(CONFIG.storageKeys.howto, false);
+    AudioFx.setMuted(!!Storage.get(CONFIG.storageKeys.mute, false));
+    this.resetFx();
+    this.toTitle();
+  },
+  toTitle() {
+    this.state = 'title';
+    Input.reset();
+    // タイトル背景用に完成済みの1機目を飾る
+    this.robotIndex = 0; this.attached = ROBOTS[0].sequence.slice(); this.parts = [];
+    this.bodyX = CONFIG.W / 2; this.flyAway = null; this.phase = 'normal';
+    this.resetFx();
+  },
+  startFromTitle() {
+    if (!this.howtoSeen) { this.state = 'howto'; this.howtoPage = 0; this.howtoFromTitle = false; }
+    else this.start();
+  },
+  finishHowto() {
+    this.howtoSeen = true;
+    Storage.set(CONFIG.storageKeys.howto, true);
+    if (this.howtoFromTitle) this.state = 'title'; else this.start();
+  },
   start() {
     this.state = 'play';
+    Input.reset();
     this.robotIndex = 0; this.done = 0;
-    this.attached = []; this.parts = [];
     this.bodyX = CONFIG.W / 2; this.bodyVel = 0;
+    this.lives = CONFIG.lives; this.score = 0; this.combo = 0; this.maxCombo = 0;
+    this.hitstop = 0; this.flyAway = null; this.result = null;
+    this.shownNotices = {}; this.notice = null;
+    this.stats = { spawned: 0, correct: 0, maxWrongStreak: 0 };
+    this.resetFx();
+    this.beginRobot(false);
+  },
+  beginRobot(withRise) {
+    this.attached = []; this.parts = [];
+    this.robotTime = 0; this.robotClean = true;
+    this.wrongStreak = 0;
+    this.st = this.stageParams(this.done);
+    this.stageNo = this.st.no;
     this.spawnTimer = CONFIG.spawn.firstDelay;
-    this.lives = CONFIG.lives; this.score = 0; this.combo = 0;
+    this.phase = withRise ? 'rise' : 'normal';
+    this.phaseT = 0;
+    const text = CONFIG.gimmick.notices[this.stageNo];
+    if (text && !this.shownNotices[this.stageNo]) {
+      this.shownNotices[this.stageNo] = true;
+      this.notice = { text, t: 0 };   // 表示中もゲームは止めない
+    }
+  },
+  pause() {
+    if (this.state !== 'play' && this.state !== 'complete') return;
+    this.prevState = this.state;
+    this.state = 'paused';
+    Input.reset();
+  },
+  resume() {
+    if (this.state !== 'paused') return;
+    this.state = this.prevState || 'play';
+    Input.reset();
+  },
+  toggleMute() {
+    AudioFx.setMuted(!AudioFx.muted);
+    Storage.set(CONFIG.storageKeys.mute, AudioFx.muted);
   },
 
+  // ---- 毎フレーム ----
   update(dt) {
     this.time += dt;
-    if (this.state !== 'play') return;
-    this.updateBody(dt);
-    const st = CONFIG.stages[0];
-    this.spawnTimer -= dt;
-    if (this.spawnTimer <= 0 && this.parts.length < CONFIG.spawn.maxParts) {
-      this.spawnTimer += st.interval;
-      const type = Math.random() < st.correct ? this.needed : pick(PART_IDS.filter(t => t !== this.needed));
-      this.parts.push({ type, x: rand(this.bodyMinX, this.bodyMaxX), y: CONFIG.layout.spawnY, judged: false, isDummy: false });
-    }
-    const line = this.catchLineY;
-    for (const p of this.parts) {
-      p.y += st.speed * dt;
-      const bottom = p.y + CONFIG.part.h;
-      if (!p.judged && bottom >= line) {
-        p.judged = true;
-        const dx = Math.abs(p.x - this.bodyX);
-        if (dx <= CONFIG.connectorWidth / 2 + CONFIG.judge.catchExtra && p.type === this.needed) {
-          p.dead = true;
-          this.attached.push(p.type);
-          if (this.attached.length === this.robot.sequence.length) {
-            this.robotIndex++; this.done++; this.attached = []; this.parts = [];
-            return;
-          }
-        }
+    if (this.state === 'paused' || this.state === 'title' || this.state === 'howto') return;
+    if (this.hitstop > 0) { this.hitstop -= dt; return; }   // ジャスト時のみ時間を止める
+    this.updateFx(dt);
+    if (this.notice) { this.notice.t += dt; if (this.notice.t >= CONFIG.timing.notice) this.notice = null; }
+
+    if (this.state === 'complete') {
+      // 完成演出中は入力を受け付けず、タイマーも進めない
+      this.completeT += dt;
+      if (this.completeT >= CONFIG.timing.complete) {
+        this.flyAway = { robot: this.robot, attached: this.attached.slice(), x: this.bodyX, t: 0 };
+        this.robotIndex++;
+        this.state = 'play';
+        this.beginRobot(true);
       }
-      if (bottom >= CONFIG.layout.groundY) p.dead = true;
+      return;
     }
-    this.parts = this.parts.filter(p => !p.dead);
+    if (this.state === 'gameover') { this.goT += dt; return; }
+    if (this.state !== 'play') return;
+
+    this.updateBody(dt);
+    if (this.phase === 'rise') {
+      this.phaseT += dt;
+      if (this.flyAway) this.flyAway.t = this.phaseT;
+      if (this.phaseT >= CONFIG.timing.rise) { this.phase = 'normal'; this.flyAway = null; }
+      return;
+    }
+    this.robotTime += dt;
+    this.updateSpawn(dt);
+    this.updateParts(dt);
   },
 
   updateBody(dt) {
@@ -384,7 +506,7 @@ const Game = {
       this.bodyX = clamp(inp.targetX, this.bodyMinX, this.bodyMaxX);
       this.bodyVel = 0;
     } else if (inp.dir !== 0) {
-      // キー／タップ：0.08秒で最大速度まで加速
+      // キー／タップ：accelTime 秒で最大速度まで加速
       if (Math.sign(this.bodyVel) !== inp.dir) this.bodyVel = 0;
       this.bodyVel = clamp(this.bodyVel + inp.dir * (b.maxSpeed / b.accelTime) * dt, -b.maxSpeed, b.maxSpeed);
       this.bodyX = clamp(this.bodyX + this.bodyVel * dt, this.bodyMinX, this.bodyMaxX);
@@ -393,12 +515,311 @@ const Game = {
     }
   },
 
-  // 入力ハンドラ
-  onTap(x, y) { return false; },
+  // ---- 出現制御 ----
+  updateSpawn(dt) {
+    this.spawnTimer -= dt;
+    if (this.spawnTimer > 0) return;
+    const room = CONFIG.spawn.maxParts - this.parts.length;
+    if (room <= 0) { this.spawnTimer = 0; return; }   // 空きが出たらすぐ出す
+    const st = this.st, g = CONFIG.gimmick;
+    let spawned = false;
+    if (st.pair && room >= 2 && Math.random() < g.pairRate) spawned = this.spawnPair();
+    if (!spawned) {
+      const rate = Math.max(st.correct, CONFIG.spawn.minCorrectRate);
+      const correct = this.wrongStreak >= CONFIG.spawn.pityAfterWrong || Math.random() < rate;
+      this.spawnOne(correct);
+    }
+    this.spawnTimer = Math.max(0, this.spawnTimer) + st.interval;
+  },
+
+  // 受け止めラインまでの落下時間と、そこから求めた到達可能範囲
+  reachRange() {
+    const dist = this.catchLineY - CONFIG.part.h - CONFIG.layout.spawnY;
+    const speed = this.st.speed * this.comboSpeedMul;
+    const reach = CONFIG.body.maxSpeed * (dist / speed) * CONFIG.spawn.reachFactor;
+    return {
+      lo: Math.max(this.bodyMinX, this.bodyX - reach),
+      hi: Math.min(this.bodyMaxX, this.bodyX + reach),
+      dist, speed,
+    };
+  },
+
+  makePart(correct) {
+    const p = { type: this.needed, isDummy: false, crack: false, palette: null,
+      x: 0, y: CONFIG.layout.spawnY, judged: false, wasCorrect: false, wobble: null, born: this.time };
+    if (!correct) {
+      if (this.st.dummy && Math.random() < CONFIG.gimmick.dummyRate) {
+        // ダミー：正解と同じ種別（印も同じ）だが、他機体の配色かヒビ入り
+        p.isDummy = true;
+        if (Math.random() < CONFIG.gimmick.dummyCrackRate) p.crack = true;
+        else p.palette = pick(ROBOTS.filter(r => r.palette !== this.robot.palette)).palette;
+      } else {
+        p.type = pick(PART_IDS.filter(t => t !== this.needed));
+      }
+    }
+    this.stats.spawned++;
+    if (correct) { this.stats.correct++; this.wrongStreak = 0; }
+    else { this.wrongStreak++; this.stats.maxWrongStreak = Math.max(this.stats.maxWrongStreak, this.wrongStreak); }
+    return p;
+  },
+
+  spawnOne(correct) {
+    const p = this.makePart(correct);
+    const r = this.reachRange();
+    const catchX = rand(r.lo, r.hi);
+    const g = CONFIG.gimmick;
+    if (this.st.wobble && Math.random() < g.wobbleRate) {
+      // 揺れ落下：受け止めラインに届く時点の x が catchX になるよう位相を逆算する。
+      // 揺れの中心は振幅ぶん内側に置き、画面外（移動範囲外）にはみ出さない
+      const baseX = clamp(catchX, this.bodyMinX + g.wobbleAmp, this.bodyMaxX - g.wobbleAmp);
+      const s = clamp((catchX - baseX) / g.wobbleAmp, -1, 1);
+      const thetaAtLine = Math.random() < 0.5 ? Math.asin(s) : Math.PI - Math.asin(s);
+      const k = (Math.PI * 2) / (r.speed * g.wobblePeriod);   // 落下距離 1px あたりの位相
+      p.wobble = { baseX, phi0: thetaAtLine - k * r.dist, k };
+      p.x = this.wobbleX(p);
+    } else {
+      p.x = catchX;
+    }
+    this.parts.push(p);
+  },
+
+  // 2個同時落下：片方が正解、片方が不正解。間隔は pairGap 以上
+  spawnPair() {
+    const r = this.reachRange(), gap = CONFIG.gimmick.pairGap;
+    const lo = this.bodyMinX, hi = this.bodyMaxX;
+    // 正解パーツの候補区間（到達可能 かつ どちらかの側に相方を置ける）
+    const ranges = [
+      [Math.max(r.lo, lo), Math.min(r.hi, hi - gap)],
+      [Math.max(r.lo, lo + gap), Math.min(r.hi, hi)],
+    ].filter(([a, b]) => b >= a);
+    if (!ranges.length) return false;
+    const total = ranges.reduce((s, [a, b]) => s + (b - a), 0);
+    let u = Math.random() * total, cx = ranges[0][0];
+    for (const [a, b] of ranges) { if (u <= b - a) { cx = a + u; break; } u -= b - a; }
+    const sides = [];
+    if (cx - gap >= lo) sides.push([lo, cx - gap]);
+    if (cx + gap <= hi) sides.push([cx + gap, hi]);
+    const [wa, wb] = pick(sides);
+    const good = this.makePart(true), bad = this.makePart(false);
+    good.x = cx; bad.x = rand(wa, wb);
+    this.parts.push(good, bad);
+    return true;
+  },
+
+  wobbleX(p) {
+    const w = p.wobble;
+    return w.baseX + CONFIG.gimmick.wobbleAmp * Math.sin(w.phi0 + w.k * (p.y - CONFIG.layout.spawnY));
+  },
+
+  // ---- 落下と判定 ----
+  updateParts(dt) {
+    const speed = this.st.speed * this.comboSpeedMul;   // コンボが切れると即正規値
+    const ground = CONFIG.layout.groundY;
+    for (const p of this.parts) {
+      if (p.dead) continue;
+      p.y += speed * dt;
+      if (p.wobble) p.x = this.wobbleX(p);
+      const bottom = p.y + CONFIG.part.h;
+      // 底辺が受け止めラインに達したフレームで1回だけ判定（本体が伸びてラインが上がった場合もここで拾う）
+      if (!p.judged && bottom >= this.catchLineY) {
+        p.judged = true;
+        const dx = Math.abs(p.x - this.bodyX);
+        const inRange = dx <= CONFIG.connectorWidth / 2 + CONFIG.judge.catchExtra;
+        p.wasCorrect = !p.isDummy && p.type === this.needed;
+        if (inRange) {
+          p.dead = true;
+          if (p.wasCorrect) this.onAttach(p, dx <= CONFIG.judge.justDx);
+          else this.onMisfit(p);
+          if (this.state !== 'play') return;   // 完成した
+          continue;
+        }
+      }
+      if (bottom >= ground) {
+        p.dead = true;
+        if (p.wasCorrect) { this.onMiss(p); if (this.state !== 'play') return; }
+      }
+    }
+    this.parts = this.parts.filter(p => !p.dead);
+  },
+
+  addScore(points, x, y, color) {
+    points = Math.round(points);
+    this.score += points;
+    this.fx.floats.push({ text: '+' + points, x, y, t: 0, color: color || '#fff' });
+  },
+
+  onAttach(p, just) {
+    const lineY = this.catchLineY;
+    this.attached.push(p.type);
+    this.combo++;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
+    const sc = CONFIG.score;
+    this.addScore((just ? sc.just : sc.catch) * this.comboScoreMul, this.bodyX, lineY - 30, just ? '#fff36b' : '#fff');
+    if (this.combo % 10 === 0) this.fx.comboPopT = CONFIG.timing.comboPop;
+    // 演出：吸い付くスナップ＋火花
+    this.fx.snap = { index: this.attached.length - 1, dx: p.x - this.bodyX, t: 0 };
+    this.spawnSparks(this.bodyX, lineY, CONFIG.fx.sparks, PART_TYPES[p.type].color);
+    if (just) {
+      this.hitstop = CONFIG.timing.hitstop;
+      this.fx.justT = CONFIG.timing.just;
+      if (!reducedMotion) this.fx.shakeT = CONFIG.timing.just;
+      this.fx.rings.push({ x: this.bodyX, y: lineY, t: 0 });
+      AudioFx.play('just', { combo: this.combo });
+    } else {
+      AudioFx.play('catch', { combo: this.combo });
+    }
+    if (this.attached.length === this.robot.sequence.length) this.onComplete();
+  },
+
+  onMisfit(p) {
+    // 誤合体：直前に付けたパーツが1つ外れる（ベースだけならコンボリセットのみ）。ライフは減らない
+    this.combo = 0;
+    this.robotClean = false;
+    const lineY = this.catchLineY;
+    if (this.attached.length > 0) {
+      const t = this.attached.pop();
+      const dir = p.x < this.bodyX ? 1 : -1;
+      this.fx.debris.push(this.makeDebris(t, this.robot.palette, this.bodyX, lineY, dir * rand(180, 260), -rand(220, 320), this.bodyScale(this.attached)));
+    }
+    // ぶつかった不正解パーツも弾かれる
+    this.fx.debris.push(this.makeDebris(p.type, p.palette || this.robot.palette, p.x, p.y + CONFIG.part.h, (p.x < this.bodyX ? -1 : 1) * rand(120, 200), -rand(160, 240), PART_TYPES[p.type].fallScale, p.crack));
+    this.fx.bodyFlashT = CONFIG.timing.misfit;
+    if (this.fx.snap && this.fx.snap.index >= this.attached.length) this.fx.snap = null;
+    AudioFx.play('misfit');
+  },
+
+  onMiss(p) {
+    // 取り逃し：ライフ-1、コンボ0
+    this.combo = 0;
+    this.robotClean = false;
+    this.lives = Math.max(0, this.lives - 1);
+    this.fx.lifeBreak.push({ index: this.lives, t: 0 });
+    this.fx.missBounce.push({ type: p.type, palette: p.palette || this.robot.palette, x: p.x, t: 0 });
+    AudioFx.play('miss');
+    if (this.lives <= 0) this.onGameOver();
+  },
+
+  onComplete() {
+    const n = this.robot.sequence.length, sc = CONFIG.score;
+    const base = sc.completePerPart * n;
+    const noMiss = this.robotClean ? base * sc.noMissBonus : 0;
+    const refSec = n * this.st.interval * sc.speedFactor;
+    const speed = Math.max(0, (refSec - this.robotTime) * sc.speedPerSec);
+    this.score += Math.round(base) + Math.round(noMiss) + Math.round(speed);
+    this.completeInfo = { robot: this.robot, base: Math.round(base), noMiss: Math.round(noMiss), speed: Math.round(speed), time: this.robotTime };
+    this.done++;
+    this.lives = Math.min(CONFIG.lives, this.lives + 1);
+    this.parts = [];                 // 画面内の残りパーツはすべて消す
+    this.state = 'complete';
+    this.completeT = 0;
+    this.notice = null;
+    Input.reset();
+    if (!reducedMotion) this.fx.flashT = 0.25;
+    AudioFx.play('complete');
+  },
+
+  onGameOver() {
+    this.state = 'gameover';
+    this.goT = 0;
+    this.parts = [];
+    Input.reset();
+    // 本体がバラバラに崩れる
+    let y = CONFIG.layout.groundY;
+    const s = this.bodyScale(this.attached);
+    const pieces = [{ t: 'base', h: CONFIG.body.baseStackH }].concat(this.attached.map(t => ({ t, h: PART_TYPES[t].stackH })));
+    for (const pc of pieces) {
+      this.fx.debris.push(this.makeDebris(pc.t, this.robot.palette, this.bodyX + rand(-6, 6), y, rand(-220, 220), -rand(150, 380), s));
+      y -= pc.h * s;
+    }
+    this.attached = [];
+    this.collapsed = true;
+    const isNew = this.score > this.best.score;
+    if (isNew) {
+      this.best = { score: this.score, robots: this.done };
+      Storage.set(CONFIG.storageKeys.best, this.best);
+    }
+    this.result = { score: this.score, robots: this.done, maxCombo: this.maxCombo, isNew };
+    AudioFx.play('gameover');
+  },
+
+  get resultShown() { return this.state === 'gameover' && this.goT >= CONFIG.timing.collapse; },
+  get resultLocked() { return this.goT < CONFIG.timing.collapse + CONFIG.timing.resultLock; },
+
+  // ---- 演出の更新 ----
+  makeDebris(type, palette, x, y, vx, vy, scale, crack) {
+    return { type, palette, x, y, vx, vy, rot: 0, vr: rand(-10, 10), scale, crack, t: 0 };
+  },
+  spawnSparks(x, y, n, color) {
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI * (0.1 + 0.8 * Math.random()), v = rand(120, 260);
+      this.fx.particles.push({ x, y, vx: Math.cos(a) * v * (Math.random() < 0.5 ? -1 : 1), vy: Math.sin(a) * v, t: 0, life: rand(0.25, 0.45), color });
+    }
+  },
+  updateFx(dt) {
+    const f = this.fx, T = CONFIG.timing;
+    for (const p of f.particles) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 600 * dt; }
+    f.particles = f.particles.filter(p => p.t < p.life);
+    for (const d of f.debris) { d.t += dt; d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 900 * dt; d.rot += d.vr * dt; }
+    f.debris = f.debris.filter(d => d.y < CONFIG.H + 120 && d.t < 2.5);
+    for (const o of f.floats) o.t += dt;
+    f.floats = f.floats.filter(o => o.t < T.floatText);
+    for (const r of f.rings) r.t += dt;
+    f.rings = f.rings.filter(r => r.t < T.just);
+    for (const l of f.lifeBreak) l.t += dt;
+    f.lifeBreak = f.lifeBreak.filter(l => l.t < 0.6);
+    for (const m of f.missBounce) m.t += dt;
+    f.missBounce = f.missBounce.filter(m => m.t < T.miss);
+    if (f.snap) { f.snap.t += dt; if (f.snap.t >= T.snap) f.snap = null; }
+    f.shakeT = Math.max(0, f.shakeT - dt);
+    f.flashT = Math.max(0, f.flashT - dt);
+    f.bodyFlashT = Math.max(0, f.bodyFlashT - dt);
+    f.justT = Math.max(0, f.justT - dt);
+    f.comboPopT = Math.max(0, f.comboPopT - dt);
+  },
+
+  // ---- 入力ハンドラ（Input から呼ばれる）----
+  // true を返したタップは本体の移動に使わない
+  onTap(x, y) {
+    switch (this.state) {
+      case 'title':
+        if (hit(UI.mute, x, y)) { this.toggleMute(); return true; }
+        if (hit(UI.titleHowto, x, y)) { this.state = 'howto'; this.howtoPage = 0; this.howtoFromTitle = true; AudioFx.play('click'); return true; }
+        AudioFx.play('click');
+        this.startFromTitle();
+        return true;
+      case 'howto':
+        AudioFx.play('click');
+        if (hit(UI.skip, x, y) || ++this.howtoPage >= HOWTO_PAGES) this.finishHowto();
+        return true;
+      case 'play':
+      case 'complete':
+        if (hit(UI.pause, x, y)) { this.pause(); return true; }
+        if (hit(UI.mute, x, y)) { this.toggleMute(); return true; }
+        return false;
+      case 'paused':
+        if (hit(UI.resume, x, y)) { this.resume(); return true; }
+        if (hit(UI.pauseTitle, x, y)) { this.toTitle(); return true; }
+        if (hit(UI.mute, x, y)) { this.toggleMute(); return true; }
+        return true;
+      case 'gameover':
+        if (!this.resultShown || this.resultLocked) return true;   // 誤タップで即リトライしない
+        if (hit(UI.retry, x, y)) { AudioFx.play('click'); this.start(); }
+        else if (hit(UI.toTitle, x, y)) { AudioFx.play('click'); this.toTitle(); }
+        return true;
+    }
+    return true;
+  },
   acceptsMove() { return this.state === 'play'; },
-  onConfirm() {},
-  onPauseKey() {},
-  onMuteKey() {},
+  onConfirm() {
+    if (this.state === 'title') { AudioFx.play('click'); this.startFromTitle(); }
+    else if (this.state === 'howto') { AudioFx.play('click'); if (++this.howtoPage >= HOWTO_PAGES) this.finishHowto(); }
+    else if (this.state === 'gameover' && this.resultShown && !this.resultLocked) { AudioFx.play('click'); this.start(); }
+    else if (this.state === 'paused') this.resume();
+  },
+  onPauseKey() {
+    if (this.state === 'paused') this.resume(); else this.pause();
+  },
+  onMuteKey() { this.toggleMute(); },
 };
 
 /* =====================================================================
@@ -700,7 +1121,12 @@ Input.init(Screen.canvas, {
   onPauseKey: () => Game.onPauseKey(),
   onMuteKey: () => Game.onMuteKey(),
 });
-Game.start();
+// タブが非表示になったら自動で一時停止
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { Game.pause(); Input.reset(); }
+  lastTs = null;   // 復帰時に経過時間が飛ばないように
+});
+Game.init();
 requestAnimationFrame(frame);
 
 // テスト・デバッグ用の参照
