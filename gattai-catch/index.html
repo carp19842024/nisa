@@ -293,13 +293,107 @@ const Input = {
 };
 
 /* =====================================================================
- * 4. Audio — 効果音（段階3で実装）
+ * 4. Audio — 効果音を Web Audio API で合成。音量は「効果音」「BGM」の2系統の GainNode
  * ===================================================================== */
 const AudioFx = {
+  ctx: null, master: null, sfx: null, bgm: null, noiseBuf: null,
   muted: false,
-  unlock() {},
-  play(name, opt) {},
-  setMuted(m) { this.muted = m; },
+  // 最初のタップ／キー入力で呼ぶ（iOS などはユーザー操作の中でしか音を出せない）
+  unlock() {
+    try {
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx = this.ctx = new AC();
+        this.master = ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 1;
+        this.master.connect(ctx.destination);
+        this.sfx = ctx.createGain(); this.sfx.gain.value = 0.55; this.sfx.connect(this.master);
+        this.bgm = ctx.createGain(); this.bgm.gain.value = 0.4; this.bgm.connect(this.master);   // BGM 用（初版では未使用）
+        const len = Math.floor(ctx.sampleRate * 0.5);
+        this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = this.noiseBuf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        // 無音を1回鳴らしてロックを解除
+        const src = ctx.createBufferSource();
+        src.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+        src.connect(ctx.destination); src.start(0);
+      }
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+    } catch (e) { /* 音が出せなくてもゲームは続行 */ }
+  },
+  setMuted(m) {
+    this.muted = m;
+    if (this.master) this.master.gain.setValueAtTime(m ? 0 : 1, this.ctx.currentTime);
+  },
+  tone(type, f0, f1, t0, dur, vol) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.sfx);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  },
+  noise(t0, dur, vol, freq, filterType) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf;
+    f.type = filterType; f.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(f); f.connect(g); g.connect(this.sfx);
+    s.start(t0); s.stop(t0 + dur + 0.02);
+  },
+  play(name, opt) {
+    if (!this.ctx || this.muted) return;
+    try {
+      const t = this.ctx.currentTime + 0.005, o = opt || {};
+      const note = (n) => 261.63 * Math.pow(2, n / 12);   // n: ドからの半音数
+      switch (name) {
+        case 'catch':
+        case 'just': {
+          // 金属的な「ガチャン」。コンボが伸びるほど半音ずつ上げる（12半音で頭打ち）
+          const semi = Math.min(Math.max((o.combo || 1) - 1, 0), 12);
+          const f = 196 * Math.pow(2, semi / 12);
+          this.tone('square', f * 2, f, t, 0.08, 0.16);
+          this.tone('square', f * 3.01, f * 1.5, t, 0.05, 0.06);
+          this.noise(t, 0.07, 0.3, 2500, 'highpass');
+          if (name === 'just') {
+            const b = 1568 * Math.pow(2, semi / 12);
+            this.tone('sine', b, b, t + 0.03, 0.45, 0.22);
+            this.tone('sine', b * 2.76, b * 2.76, t + 0.03, 0.25, 0.06);
+          }
+          break;
+        }
+        case 'misfit':
+          this.tone('sawtooth', 520, 130, t, 0.32, 0.14);
+          this.tone('square', 260, 70, t + 0.05, 0.3, 0.08);
+          break;
+        case 'miss':
+          this.tone('sine', 150, 40, t, 0.25, 0.6);
+          this.noise(t, 0.12, 0.35, 350, 'lowpass');
+          break;
+        case 'complete':
+          // ド・ミ・ソ → ド
+          [[0, 0, 0.14], [4, 0.12, 0.14], [7, 0.24, 0.14], [12, 0.38, 0.45]].forEach(([n, d, len]) => {
+            this.tone('square', note(n + 12), note(n + 12), t + d, len, 0.1);
+            this.tone('triangle', note(n), note(n), t + d, len, 0.18);
+          });
+          break;
+        case 'gameover':
+          [[7, 0, 0.2], [4, 0.2, 0.2], [0, 0.4, 0.2], [-5, 0.6, 0.6]].forEach(([n, d, len]) => {
+            this.tone('triangle', note(n), note(n) * 0.97, t + d, len, 0.22);
+            this.tone('square', note(n - 12), note(n - 12), t + d, len, 0.05);
+          });
+          break;
+        case 'click':
+          this.tone('square', 1046, 1046, t, 0.04, 0.06);
+          break;
+      }
+    } catch (e) { /* 無視 */ }
+  },
 };
 
 /* =====================================================================
@@ -309,7 +403,7 @@ const AudioFx = {
 const UI = {
   mute:       { x: 284, y: 12, w: 32, h: 32 },
   pause:      { x: 320, y: 12, w: 32, h: 32 },
-  titleHowto: { x: 110, y: 520, w: 140, h: 40 },
+  titleHowto: { x: 115, y: 318, w: 130, h: 38 },
   skip:       { x: 276, y: 16, w: 72, h: 32 },
   resume:     { x: 90, y: 300, w: 180, h: 52 },
   pauseTitle: { x: 90, y: 370, w: 180, h: 52 },
@@ -823,7 +917,7 @@ const Game = {
 };
 
 /* =====================================================================
- * 6. Render — drawPart をはじめとする描画
+ * 6. Render — drawPart をはじめとする描画とパーティクル
  * ===================================================================== */
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -978,69 +1072,251 @@ function drawPart(ctx, type, palette, x, y, scale, opts) {
   ctx.restore();
 }
 
-const Render = {
-  gridOffset: 0,
+// 色の補間（背景を段階ごとに少しずつ変える）
+function parseColor(c) {
+  if (c[0] === '#') return [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16), 1];
+  const m = c.match(/[\d.]+/g).map(Number);
+  return [m[0], m[1], m[2], m[3] === undefined ? 1 : m[3]];
+}
+const rgba = (a) => `rgba(${a[0] | 0},${a[1] | 0},${a[2] | 0},${a[3].toFixed(3)})`;
 
-  draw(ctx, g) {
+function heartPath(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + r * 0.9);
+  ctx.bezierCurveTo(x - r * 1.4, y, x - r * 0.9, y - r * 1.1, x, y - r * 0.4);
+  ctx.bezierCurveTo(x + r * 0.9, y - r * 1.1, x + r * 1.4, y, x, y + r * 0.9);
+  ctx.closePath();
+}
+
+const FONT = 'system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif';
+const COMBO_COLORS = ['#ffffff', '#ffe066', '#ffa94d', '#ff6b9a', '#b197fc', '#66d9e8'];
+
+const Render = {
+  bg: null,              // 現在の背景色（補間中）
+  tintLayer: null,
+
+  draw(ctx, g, dt) {
     ctx.setTransform(Screen.scale, 0, 0, Screen.scale, 0, 0);
-    this.drawBackground(ctx, g);
+    ctx.textBaseline = 'middle';
+    const f = g.fx;
+    // ジャスト時の画面揺れ（OS の「視差効果を減らす」が有効なら無効）
+    if (f.shakeT > 0 && !reducedMotion) {
+      const a = CONFIG.fx.justShake * (f.shakeT / CONFIG.timing.just);
+      ctx.translate(rand(-a, a), rand(-a, a));
+    }
+    this.drawBackground(ctx, g, dt);
     this.drawGround(ctx);
-    this.drawBody(ctx, g);
-    for (const p of g.parts) this.drawFallingPart(ctx, g, p);
+
+    if (g.state === 'title') { this.drawTitle(ctx, g); return; }
+    if (g.state === 'howto') { this.drawHowto(ctx, g); return; }
+
+    this.drawPlayfield(ctx, g);
     this.drawHud(ctx, g);
+    if (g.notice) this.drawNotice(ctx, g);
+    if (g.state === 'complete') this.drawComplete(ctx, g);
+    if (f.flashT > 0 && !reducedMotion) {
+      ctx.fillStyle = `rgba(255,255,255,${(f.flashT / 0.25 * 0.85).toFixed(3)})`;
+      ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.H + 20);
+    }
+    if (g.state === 'paused') this.drawPause(ctx, g);
+    if (g.resultShown) this.drawResult(ctx, g);
     if (DEBUG) this.drawDebug(ctx, g);
   },
 
-  drawBackground(ctx, g) {
-    const c = CONFIG.bgColors[0];
-    const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
-    grad.addColorStop(0, c[0]); grad.addColorStop(1, c[1]);
+  // ---- 背景 ----
+  drawBackground(ctx, g, dt) {
+    const idx = Math.min((g.state === 'title' || g.state === 'howto' ? 1 : g.stageNo) - 1, CONFIG.bgColors.length - 1);
+    const target = CONFIG.bgColors[idx].map(parseColor);
+    if (!this.bg) this.bg = target.map(c => c.slice());
+    const k = Math.min(1, (dt || 0) * 1.5);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) this.bg[i][j] = lerp(this.bg[i][j], target[i][j], k);
+    const grad = ctx.createLinearGradient(0, 0, 0, CONFIG.layout.groundY);
+    grad.addColorStop(0, rgba(this.bg[0])); grad.addColorStop(1, rgba(this.bg[1]));
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+    ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.H + 20);
     // 縦に流れる格子線
-    this.gridOffset = (g.time * 30) % 40;
-    ctx.strokeStyle = c[2]; ctx.lineWidth = 1;
+    const off = (g.time * 30) % 40;
+    ctx.strokeStyle = rgba(this.bg[2]); ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = 20; x < CONFIG.W; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, CONFIG.layout.groundY); }
-    for (let y = this.gridOffset - 40; y < CONFIG.layout.groundY; y += 40) { ctx.moveTo(0, y); ctx.lineTo(CONFIG.W, y); }
+    for (let y = off - 40; y < CONFIG.layout.groundY; y += 40) { ctx.moveTo(0, y); ctx.lineTo(CONFIG.W, y); }
     ctx.stroke();
   },
 
   drawGround(ctx) {
     const gy = CONFIG.layout.groundY;
     ctx.fillStyle = '#20232f';
-    ctx.fillRect(0, gy, CONFIG.W, CONFIG.H - gy);
+    ctx.fillRect(-10, gy, CONFIG.W + 20, CONFIG.H - gy + 10);
     ctx.fillStyle = '#3a3f52';
-    ctx.fillRect(0, gy, CONFIG.W, 4);
+    ctx.fillRect(-10, gy, CONFIG.W + 20, 4);
     ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    for (let x = 0; x < CONFIG.W; x += 24) ctx.fillRect(x, gy + 10, 12, 3);
+    for (let x = 0; x < CONFIG.W; x += 24) ctx.fillRect(x, gy + 12, 12, 3);
   },
 
-  // 合体中の本体：台座＋取り付け済みパーツを積み上げ、最上段に次の接続口
-  drawBody(ctx, g) {
-    const pal = g.robot.palette;
-    const s = g.bodyScale(g.attached);
-    let y = CONFIG.layout.groundY;
-    drawPart(ctx, 'base', pal, g.bodyX, y, s);
-    y -= CONFIG.body.baseStackH * s;
-    for (const t of g.attached) {
-      drawPart(ctx, t, pal, g.bodyX, y, s);
-      y -= PART_TYPES[t].stackH * s;
+  // ---- 機体 ----
+  // 台座＋パーツを積み上げて描き、最上段の y を返す
+  drawRobot(ctx, palette, list, x, baseY, scale, o) {
+    o = o || {};
+    let y = baseY;
+    if (!o.noBase) drawPart(ctx, 'base', palette, x, y + (o.baseOffset || 0), scale);
+    y -= CONFIG.body.baseStackH * scale;
+    const lift = o.lift || 0;
+    list.forEach((t, i) => {
+      let px = x, py = y - lift;
+      if (o.snap && o.snap.index === i) {
+        const k = 1 - o.snap.t / CONFIG.timing.snap;
+        px += o.snap.dx * k; py -= 14 * k;
+      }
+      drawPart(ctx, t, palette, px, py, scale, o.partOpts);
+      y -= PART_TYPES[t].stackH * scale;
+    });
+    return y - lift;
+  },
+
+  // 完成演出のポーズ（ROBOTS[].pose）
+  poseOpts(pose, u, t) {
+    const o = { glow: true, t, armRaiseL: 0, armRaiseR: 0, flap: 0, flame: false };
+    let lift = 0, dx = 0;
+    const e = easeOut(Math.min(1, u * 3));
+    switch (pose) {
+      case 'guard': o.armRaiseL = o.armRaiseR = 0.9 * e; lift = Math.abs(Math.sin(u * Math.PI * 3)) * 6; break;
+      case 'punch': o.armRaiseR = 2.6 * e; o.armRaiseL = 0.4 * e; dx = Math.sin(u * 30) * 2 * (1 - u); break;
+      case 'fly': o.flap = Math.sin(t * 18) * 0.25; o.flame = true; o.armRaiseL = o.armRaiseR = 0.5 * e; lift = 18 * e; break;
+      case 'cannon': o.flame = true; o.armRaiseL = o.armRaiseR = 1.4 * e; dx = Math.sin(u * 40) * 1.5; break;
+      case 'zenith': o.armRaiseL = o.armRaiseR = 2.5 * e; o.flap = 0.2 * e + Math.sin(t * 12) * 0.08; o.flame = true; lift = 12 * e; break;
     }
-    if (g.needed) this.drawConnector(ctx, g.needed, g.bodyX, y, g.time);
+    return { opts: o, lift, dx };
+  },
+
+  drawPlayfield(ctx, g) {
+    const f = g.fx, pal = g.robot.palette;
+    const gy = CONFIG.layout.groundY;
+
+    // 飛び去る前の機体（rise 中）
+    if (g.flyAway) {
+      const fa = g.flyAway, u = Math.min(1, fa.t / CONFIG.timing.rise);
+      const s = g.bodyScale(fa.attached);
+      const opts = Object.assign(this.poseOpts(fa.robot.pose, 1, g.time).opts, { flame: true });
+      this.drawRobot(ctx, fa.robot.palette, fa.attached, fa.x, gy - easeIn(u) * 700, s, { noBase: true, partOpts: opts });
+    }
+
+    // 合体中の本体（ゲームオーバー後は崩れているので描かない）
+    if (g.state !== 'gameover') {
+      const s = g.bodyScale(g.attached);
+      let baseOffset = 0, partOpts = null, lift = 0, x = g.bodyX;
+      if (g.state === 'play' && g.phase === 'rise') {
+        // 台座がいったん沈み、次の機体用にせり上がる
+        const u = g.phaseT / CONFIG.timing.rise;
+        baseOffset = u < 0.5 ? easeIn(u * 2) * 50 : (1 - easeOut((u - 0.5) * 2)) * 50;
+      }
+      const isComplete = g.state === 'complete' || (g.state === 'paused' && g.prevState === 'complete');
+      if (isComplete) {
+        const p = this.poseOpts(g.robot.pose, g.completeT / CONFIG.timing.complete, g.time);
+        partOpts = p.opts; lift = p.lift; x += p.dx;
+      }
+      const drawIt = (c) => {
+        c.save();
+        c.beginPath(); c.rect(-10, -10, CONFIG.W + 20, gy + 10); c.clip();   // せり上がりは地面の下から
+        const top = this.drawRobot(c, pal, g.attached, x, gy, s, { baseOffset, partOpts, lift, snap: f.snap, noBase: false });
+        c.restore();
+        return top;
+      };
+      if (f.bodyFlashT > 0) {
+        // 誤合体：本体が赤く点滅2回
+        const ph = 1 - f.bodyFlashT / CONFIG.timing.misfit;
+        const on = Math.floor(ph * 4) % 2 === 0;
+        if (on) this.withTint(ctx, '#ff2a2a', 0.65, drawIt); else drawIt(ctx);
+      } else {
+        drawIt(ctx);
+      }
+      if (g.needed && (g.state === 'play' || g.state === 'paused') && !(g.phase === 'rise')) {
+        this.drawConnector(ctx, g.needed, g.bodyX, g.catchLineY, g.time);
+      }
+    }
+
+    // 落下中のパーツ
+    for (const p of g.parts) this.drawFallingPart(ctx, g, p);
+
+    // 取り逃し：地面で跳ねて消える
+    for (const m of f.missBounce) {
+      const u = m.t / CONFIG.timing.miss, pt = PART_TYPES[m.type];
+      ctx.globalAlpha = 1 - u;
+      const by = gy - Math.sin(u * Math.PI) * 26;
+      drawPart(ctx, m.type, m.palette, m.x, by - (pt.bounds[1] * pt.fallScale), pt.fallScale);
+      ctx.globalAlpha = 1;
+    }
+
+    // 外れたパーツ・崩れたパーツ
+    for (const d of f.debris) {
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.rot);
+      drawPart(ctx, d.type, d.palette, 0, 0, d.scale, { crack: d.crack });
+      ctx.restore();
+    }
+    // 火花
+    for (const p of f.particles) {
+      ctx.globalAlpha = 1 - p.t / p.life;
+      ctx.fillStyle = Math.random() < 0.5 ? '#fff6c2' : p.color;
+      ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+    // ジャストの白いリング
+    for (const r of f.rings) {
+      const u = r.t / CONFIG.timing.just;
+      ctx.strokeStyle = `rgba(255,255,255,${(1 - u).toFixed(3)})`;
+      ctx.lineWidth = 4 * (1 - u) + 1;
+      ctx.beginPath(); ctx.ellipse(r.x, r.y, 14 + u * 70, 6 + u * 26, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (f.justT > 0) {
+      const u = 1 - f.justT / CONFIG.timing.just;
+      this.text(ctx, 'JUST!', g.bodyX, g.catchLineY - 56 - u * 10, 26 + (1 - u) * 8, '#fff36b', 'center', '#7a2e00');
+    }
+    // 得点の数字
+    for (const o of f.floats) {
+      const u = o.t / CONFIG.timing.floatText;
+      ctx.globalAlpha = 1 - u * u;
+      this.text(ctx, o.text, o.x, o.y - u * 30, 16, o.color, 'center');
+      ctx.globalAlpha = 1;
+    }
+  },
+
+  // 対象だけを赤く染める（背景には色を付けない）
+  withTint(ctx, color, alpha, fn) {
+    const c = Screen.canvas;
+    if (!this.tintLayer) this.tintLayer = document.createElement('canvas');
+    const L = this.tintLayer;
+    if (L.width !== c.width || L.height !== c.height) { L.width = c.width; L.height = c.height; }
+    const lc = L.getContext('2d');
+    lc.setTransform(1, 0, 0, 1, 0, 0);
+    lc.clearRect(0, 0, L.width, L.height);
+    lc.setTransform(ctx.getTransform());
+    fn(lc);
+    lc.setTransform(1, 0, 0, 1, 0, 0);
+    lc.globalCompositeOperation = 'source-atop';
+    lc.globalAlpha = alpha; lc.fillStyle = color;
+    lc.fillRect(0, 0, L.width, L.height);
+    lc.globalCompositeOperation = 'source-over'; lc.globalAlpha = 1;
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(L, 0, 0); ctx.restore();
   },
 
   drawConnector(ctx, type, x, y, time) {
     const pt = PART_TYPES[type];
     const half = CONFIG.connectorWidth / 2;
+    const blink = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * Math.PI * 2 * 2.5));
+    // 光の柱（どこで受けるかを分かりやすく）
+    const grad = ctx.createLinearGradient(0, y - 60, 0, y);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(1, `rgba(255,255,255,${(0.25 * blink).toFixed(3)})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x - half, y - 60, half * 2, 60);
     roundRect(ctx, x - half, y - 5, half * 2, 8, 3);
     fillStroke(ctx, '#1b2130');
-    const blink = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(time * Math.PI * 2 * 2.5));
     ctx.globalAlpha = blink;
     ctx.fillStyle = pt.color;
     ctx.fillRect(x - half + 3, y - 3, half * 2 - 6, 4);
-    drawShape(ctx, pt.shape, x, y - 15, 9);
-    ctx.fillStyle = pt.color; ctx.fill();
+    drawShape(ctx, pt.shape, x, y - 16, 9);
+    ctx.fill();
     ctx.globalAlpha = 1;
     ctx.strokeStyle = OUTLINE; ctx.lineWidth = 2; ctx.stroke();
   },
@@ -1051,38 +1327,334 @@ const Render = {
     const cx = p.x, cy = p.y + CONFIG.part.h / 2;
     const sc = pt.fallScale;
     const mid = (pt.bounds[0] + pt.bounds[1]) / 2;
+    // 出現直後はフェードイン
+    ctx.globalAlpha = Math.min(1, (g.time - (p.born || 0)) / 0.12 + 0.2);
     drawPart(ctx, p.type, p.palette || g.robot.palette, cx, cy - mid * sc, sc, { crack: p.crack });
     this.drawMark(ctx, p.type, cx + 20, p.y + 4);
+    ctx.globalAlpha = 1;
   },
 
   drawMark(ctx, type, x, y) {
     const pt = PART_TYPES[type];
     ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(12,16,28,0.85)'; ctx.fill();
+    ctx.fillStyle = 'rgba(12,16,28,0.88)'; ctx.fill();
     drawShape(ctx, pt.shape, x, y, 7);
     ctx.fillStyle = pt.color; ctx.fill();
   },
 
+  // ---- 文字・ボタン ----
+  text(ctx, str, x, y, size, color, align, stroke) {
+    ctx.font = `900 ${size}px ${FONT}`;
+    ctx.textAlign = align || 'left';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = stroke || 'rgba(10,12,24,0.85)';
+    ctx.lineWidth = Math.max(3, size * 0.18);
+    ctx.strokeText(str, x, y);
+    ctx.fillStyle = color || '#fff';
+    ctx.fillText(str, x, y);
+  },
+  button(ctx, r, label, opt) {
+    opt = opt || {};
+    ctx.globalAlpha = opt.disabled ? 0.4 : 1;
+    roundRect(ctx, r.x, r.y + 4, r.w, r.h, 12);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
+    roundRect(ctx, r.x, r.y, r.w, r.h, 12);
+    ctx.fillStyle = opt.color || '#ffd43b'; ctx.fill();
+    ctx.strokeStyle = OUTLINE; ctx.lineWidth = 3; ctx.stroke();
+    ctx.font = `900 ${opt.size || 20}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = opt.textColor || '#1a1a2e';
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 1);
+    ctx.globalAlpha = 1;
+  },
+  iconButton(ctx, r, kind) {
+    roundRect(ctx, r.x, r.y, r.w, r.h, 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    if (kind === 'pause') {
+      ctx.fillRect(cx - 6, cy - 7, 4, 14); ctx.fillRect(cx + 2, cy - 7, 4, 14);
+    } else {
+      // スピーカー
+      ctx.beginPath();
+      ctx.moveTo(cx - 9, cy - 3); ctx.lineTo(cx - 5, cy - 3); ctx.lineTo(cx, cy - 8);
+      ctx.lineTo(cx, cy + 8); ctx.lineTo(cx - 5, cy + 3); ctx.lineTo(cx - 9, cy + 3); ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      if (AudioFx.muted) { ctx.moveTo(cx + 3, cy - 4); ctx.lineTo(cx + 10, cy + 4); ctx.moveTo(cx + 10, cy - 4); ctx.lineTo(cx + 3, cy + 4); }
+      else { ctx.arc(cx + 1, cy, 5, -0.9, 0.9); ctx.moveTo(cx + 5.5, cy - 7.5); ctx.arc(cx + 1, cy, 9, -0.95, 0.95); }
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+  },
+
+  // ---- HUD ----
   drawHud(ctx, g) {
-    ctx.fillStyle = 'rgba(10,12,24,0.55)';
-    ctx.fillRect(0, 0, CONFIG.W, CONFIG.layout.infoBottom);
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 20px system-ui, sans-serif';
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    ctx.fillText(String(g.score), 12, 28);
-    ctx.font = 'bold 15px system-ui, sans-serif';
-    ctx.fillText(g.robot.name, 12, 76);
-    // 進捗アイコン列
-    const seq = g.robot.sequence;
+    const f = g.fx;
+    ctx.fillStyle = 'rgba(10,12,28,0.6)';
+    ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.layout.hudBottom + 10);
+    ctx.fillStyle = 'rgba(10,12,28,0.35)';
+    ctx.fillRect(-10, CONFIG.layout.hudBottom, CONFIG.W + 20, CONFIG.layout.infoBottom - CONFIG.layout.hudBottom);
+
+    // スコア（左）
+    ctx.font = `700 10px ${FONT}`; ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('SCORE', 12, 15);
+    this.text(ctx, String(g.score), 12, 35, 22, '#fff');
+
+    // コンボ（中央）
+    if (g.combo > 0) {
+      const pop = f.comboPopT > 0 ? 1 + 0.6 * (f.comboPopT / CONFIG.timing.comboPop) : 1;
+      const col = COMBO_COLORS[Math.min(Math.floor(g.combo / 10), COMBO_COLORS.length - 1)];
+      ctx.save();
+      ctx.translate(165, 24); ctx.scale(pop, pop);
+      this.text(ctx, String(g.combo), 0, 0, 24, col, 'center');
+      ctx.restore();
+      ctx.font = `800 10px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = col;
+      ctx.fillText(`COMBO ×${g.comboScoreMul.toFixed(1)}`, 165, 45);
+    }
+
+    // ライフ（右）
+    for (let i = 0; i < CONFIG.lives; i++) {
+      const x = 216 + i * 22, y = 28;
+      const br = f.lifeBreak.find(l => l.index === i);
+      if (br) {
+        // 割れる
+        const u = br.t / 0.6;
+        ctx.globalAlpha = 1 - u;
+        for (const s of [-1, 1]) {
+          ctx.save();
+          ctx.translate(x + s * u * 8, y + u * u * 18); ctx.rotate(s * u * 0.8);
+          ctx.beginPath(); ctx.rect(s < 0 ? -12 : 0, -12, 12, 24); ctx.clip();
+          heartPath(ctx, 0, 0, 9); fillStroke(ctx, '#ff4d6d');
+          ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+      } else if (i < g.lives) {
+        heartPath(ctx, x, y, 9); fillStroke(ctx, '#ff4d6d');
+        ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(x - 3.5, y - 3, 2, 0, Math.PI * 2); ctx.fill();
+      } else {
+        heartPath(ctx, x, y, 9);
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+    }
+    this.iconButton(ctx, UI.mute, 'mute');
+    this.iconButton(ctx, UI.pause, 'pause');
+
+    // 機体情報：機体名と合体の進捗アイコン列
+    const robo = g.state === 'gameover' ? g.robot : g.robot;
+    ctx.font = `700 10px ${FONT}`; ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText(`No.${g.robotIndex + 1}  STAGE ${g.stageNo}`, 12, 66);
+    this.text(ctx, robo.name, 12, 83, 15, '#fff');
+    const seq = robo.sequence;
     for (let i = 0; i < seq.length; i++) {
-      const x = CONFIG.W - 16 - (seq.length - 1 - i) * 26, y = 76;
+      const x = CONFIG.W - 18 - (seq.length - 1 - i) * 26, y = 76;
       const pt = PART_TYPES[seq[i]];
-      const isDone = i < g.attached.length, isNext = i === g.attached.length;
-      ctx.globalAlpha = isDone ? 1 : isNext ? (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(g.time * Math.PI * 5))) : 0.25;
-      drawShape(ctx, pt.shape, x, y, 9);
+      const isDone = i < g.attached.length || g.state === 'complete';
+      const isNext = i === g.attached.length && g.state === 'play';
+      ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
+      ctx.fillStyle = isNext ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.3)'; ctx.fill();
+      ctx.globalAlpha = isDone ? 1 : isNext ? 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(g.time * Math.PI * 5)) : 0.22;
+      drawShape(ctx, pt.shape, x, y, 7.5);
       ctx.fillStyle = pt.color; ctx.fill();
       ctx.strokeStyle = OUTLINE; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.globalAlpha = 1;
+      if (isNext) { ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.strokeStyle = pt.color; ctx.lineWidth = 2; ctx.stroke(); }
+    }
+  },
+
+  drawNotice(ctx, g) {
+    const u = g.notice.t / CONFIG.timing.notice;
+    const a = u < 0.15 ? u / 0.15 : u > 0.8 ? (1 - u) / 0.2 : 1;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(10,12,28,0.7)';
+    ctx.fillRect(0, 236, CONFIG.W, 48);
+    ctx.fillStyle = '#ffd43b'; ctx.fillRect(0, 236, CONFIG.W, 3); ctx.fillRect(0, 281, CONFIG.W, 3);
+    this.text(ctx, g.notice.text, CONFIG.W / 2, 261, 22, '#ffd43b', 'center');
+    ctx.globalAlpha = 1;
+  },
+
+  // 合体完成：白く光る → ポーズ → 機体名 → 飛び去る（飛び去りは rise 中）
+  drawComplete(ctx, g) {
+    const t = g.completeT, info = g.completeInfo;
+    if (!info) return;
+    if (t > 0.2) {
+      const u = Math.min(1, (t - 0.2) / 0.25);
+      const sc = 1.6 - 0.6 * easeOut(u);
+      ctx.globalAlpha = u;
+      ctx.fillStyle = 'rgba(10,12,28,0.55)';
+      ctx.fillRect(0, 150, CONFIG.W, 92);
+      ctx.save();
+      ctx.translate(CONFIG.W / 2, 178); ctx.scale(sc, sc);
+      this.text(ctx, 'COMPLETE!', 0, 0, 18, '#ffd43b', 'center');
+      ctx.restore();
+      ctx.save();
+      ctx.translate(CONFIG.W / 2, 214); ctx.scale(sc, sc);
+      const size = info.robot.name.length > 8 ? 26 : 30;
+      this.text(ctx, info.robot.name, 0, 0, size, '#fff', 'center', info.robot.palette.main);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+    const lines = [[`完成ボーナス`, info.base]];
+    if (info.noMiss) lines.push(['ノーミス', info.noMiss]);
+    if (info.speed) lines.push(['スピード', info.speed]);
+    lines.forEach(([label, v], i) => {
+      const at = 0.45 + i * 0.12;
+      if (t < at) return;
+      const a = Math.min(1, (t - at) / 0.1);
+      ctx.globalAlpha = a;
+      ctx.font = `800 14px ${FONT}`; ctx.fillStyle = '#fff';
+      ctx.textAlign = 'right'; this.text(ctx, label, 200, 262 + i * 22, 14, '#fff', 'right');
+      this.text(ctx, '+' + v, 212, 262 + i * 22, 14, '#ffe066', 'left');
+      ctx.globalAlpha = 1;
+    });
+  },
+
+  drawPause(ctx, g) {
+    ctx.fillStyle = 'rgba(8,10,24,0.72)';
+    ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.H + 20);
+    this.text(ctx, 'PAUSE', CONFIG.W / 2, 220, 40, '#fff', 'center');
+    this.button(ctx, UI.resume, 'RESUME');
+    this.button(ctx, UI.pauseTitle, 'TITLE', { color: '#dee2e6' });
+    this.iconButton(ctx, UI.mute, 'mute');
+    ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('Esc / P で再開', CONFIG.W / 2, 450);
+  },
+
+  drawResult(ctx, g) {
+    const r = g.result, t = g.goT - CONFIG.timing.collapse;
+    const a = Math.min(1, t / 0.25);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(8,10,24,0.78)';
+    ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.H + 20);
+    this.text(ctx, 'GAME OVER', CONFIG.W / 2, 130, 38, '#ff6b6b', 'center');
+    ctx.font = `700 12px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('SCORE', CONFIG.W / 2, 196);
+    this.text(ctx, String(r.score), CONFIG.W / 2, 228, 40, '#fff', 'center');
+    if (r.isNew && Math.floor(g.time * 4) % 2 === 0) this.text(ctx, 'NEW RECORD!', CONFIG.W / 2, 266, 18, '#ffd43b', 'center');
+    const rows = [['完成した機体', r.robots + ' 機'], ['最大コンボ', String(r.maxCombo)], ['ハイスコア', `${g.best.score}（${g.best.robots}機）`]];
+    rows.forEach(([k, v], i) => {
+      const y = 310 + i * 34;
+      ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(40, y - 14, 280, 28);
+      ctx.font = `700 14px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.textAlign = 'left';
+      ctx.fillText(k, 52, y + 1);
+      ctx.font = `900 16px ${FONT}`; ctx.fillStyle = '#fff'; ctx.textAlign = 'right';
+      ctx.fillText(v, 308, y + 1);
+    });
+    const locked = g.resultLocked;
+    this.button(ctx, UI.retry, 'RETRY', { disabled: locked });
+    this.button(ctx, UI.toTitle, 'TITLE', { disabled: locked, color: '#dee2e6' });
+    if (!locked) {
+      ctx.font = `600 11px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillText('Space / Enter でリトライ', CONFIG.W / 2, 580);
+    }
+    ctx.globalAlpha = 1;
+  },
+
+  // ---- タイトル ----
+  drawTitle(ctx, g) {
+    const gy = CONFIG.layout.groundY;
+    const bob = Math.sin(g.time * 2) * 3;
+    const r = ROBOTS[0];
+    this.drawRobot(ctx, r.palette, r.sequence, CONFIG.W / 2, gy, 1.1, { lift: bob, partOpts: { glow: Math.sin(g.time * 3) > 0, t: g.time } });
+    // ロゴ
+    ctx.save();
+    ctx.translate(CONFIG.W / 2, 128);
+    ctx.rotate(-0.04);
+    this.text(ctx, '合体キャッチ', 0, 0, 46, '#ffd43b', 'center', '#2b1055');
+    ctx.restore();
+    this.text(ctx, 'GATTAI CATCH', CONFIG.W / 2, 172, 16, '#fff', 'center', '#2b1055');
+    // 落ちてくるパーツの飾り
+    const ids = PART_IDS;
+    for (let i = 0; i < 4; i++) {
+      const t = (g.time * 0.3 + i / 4) % 1;
+      const x = i % 2 ? 314 : 46, y = 230 + t * 330;
+      ctx.globalAlpha = Math.sin(t * Math.PI) * 0.8;
+      const type = ids[(i * 2 + Math.floor(g.time * 0.3 + i / 4)) % ids.length];
+      const pt = PART_TYPES[type];
+      drawPart(ctx, type, ROBOTS[i % ROBOTS.length].palette, x, y, pt.fallScale * 0.7);
+      ctx.globalAlpha = 1;
+    }
+    this.text(ctx, `HI-SCORE  ${g.best.score}`, CONFIG.W / 2, 214, 16, '#fff', 'center');
+    if (g.best.robots) {
+      ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(`（完成 ${g.best.robots} 機）`, CONFIG.W / 2, 234);
+    }
+    if (Math.floor(g.time * 2) % 2 === 0) this.text(ctx, 'TAP TO START', CONFIG.W / 2, 285, 24, '#fff', 'center');
+    this.button(ctx, UI.titleHowto, 'あそびかた', { size: 16, color: '#dee2e6' });
+    this.iconButton(ctx, UI.mute, 'mute');
+    ctx.font = `600 10px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('PC：← → / A D で移動　Space で開始　Esc で一時停止', CONFIG.W / 2, 622);
+  },
+
+  // ---- 遊び方（3枚） ----
+  drawHowto(ctx, g) {
+    ctx.fillStyle = 'rgba(8,10,24,0.6)';
+    ctx.fillRect(-10, -10, CONFIG.W + 20, CONFIG.H + 20);
+    const page = g.howtoPage, t = g.time;
+    this.text(ctx, 'あそびかた', 24, 32, 20, '#ffd43b');
+    this.button(ctx, UI.skip, 'SKIP', { size: 14, color: '#dee2e6' });
+    // 絵のパネル
+    roundRect(ctx, 30, 80, 300, 330, 16);
+    ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 2; ctx.stroke();
+    const r = ROBOTS[0], pal = r.palette;
+    const floorY = 380;
+    ctx.fillStyle = '#20232f'; ctx.fillRect(32, floorY, 296, 28);
+    let title, lines;
+    if (page === 0) {
+      const x = 180 + Math.sin(t * 2) * 70;
+      this.drawRobot(ctx, pal, ['leg'], x, floorY, 1);
+      // 指
+      const fx = x + 20, fy = 330;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath(); ctx.ellipse(fx, fy, 10, 14, -0.3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      for (const s of [-1, 1]) {
+        ctx.beginPath(); ctx.moveTo(180 + s * 40, 200); ctx.lineTo(180 + s * 110, 200);
+        ctx.lineTo(180 + s * 96, 188); ctx.moveTo(180 + s * 110, 200); ctx.lineTo(180 + s * 96, 212); ctx.stroke();
+      }
+      ctx.lineCap = 'butt';
+      title = '① 本体を左右に動かす';
+      lines = ['ドラッグで動かす', 'または 画面の左右を押しっぱなし', 'PC：← → / A D キー'];
+    } else if (page === 1) {
+      const top = this.drawRobot(ctx, pal, ['leg'], 180, floorY, 1);
+      this.drawConnector(ctx, 'body', 180, top, t);
+      const u = (t * 0.6) % 1;
+      const py = 110 + u * (top - 150);
+      const pt = PART_TYPES.body;
+      drawPart(ctx, 'body', pal, 180, py + 20 - ((pt.bounds[0] + pt.bounds[1]) / 2) * pt.fallScale, pt.fallScale);
+      this.drawMark(ctx, 'body', 200, py + 4);
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.setLineDash([4, 5]); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(250, 140); ctx.lineTo(250, top - 16); ctx.stroke(); ctx.setLineDash([]);
+      this.text(ctx, '同じ印！', 262, 200, 14, '#ffe066');
+      title = '② 点滅している接続口と同じパーツを受け止める';
+      lines = ['印の「形」と「色」で見分けよう', '真ん中で受けると JUST!（高得点）', '順番どおりに積むとロボット完成'];
+    } else {
+      const top = this.drawRobot(ctx, pal, ['leg'], 120, floorY, 1);
+      this.drawConnector(ctx, 'body', 120, top, t);
+      const pt = PART_TYPES.head;
+      drawPart(ctx, 'head', pal, 240, 260 - ((pt.bounds[0] + pt.bounds[1]) / 2) * pt.fallScale, pt.fallScale);
+      this.drawMark(ctx, 'head', 260, 244);
+      ctx.strokeStyle = '#ff6b6b'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(214, 230); ctx.lineTo(266, 290); ctx.moveTo(266, 230); ctx.lineTo(214, 290); ctx.stroke();
+      ctx.lineCap = 'butt';
+      const pb = PART_TYPES.body;
+      drawPart(ctx, 'body', pal, 240, 150 - ((pb.bounds[0] + pb.bounds[1]) / 2) * pb.fallScale, pb.fallScale, { crack: true });
+      this.drawMark(ctx, 'body', 260, 134);
+      this.text(ctx, 'ヒビ・色ちがいはニセモノ', 180, 112, 12, '#ffd43b', 'center');
+      title = '③ ちがうパーツはよける';
+      lines = ['受け止めると、パーツが1つ外れる', '正解パーツを3回落とすとゲームオーバー', '完成するとライフが1回復'];
+    }
+    this.text(ctx, title, CONFIG.W / 2, 446, 15, '#fff', 'center');
+    ctx.font = `700 13px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    lines.forEach((l, i) => ctx.fillText(l, CONFIG.W / 2, 480 + i * 24));
+    for (let i = 0; i < HOWTO_PAGES; i++) {
+      ctx.beginPath(); ctx.arc(CONFIG.W / 2 - 16 + i * 16, 574, 5, 0, Math.PI * 2);
+      ctx.fillStyle = i === page ? '#ffd43b' : 'rgba(255,255,255,0.3)'; ctx.fill();
+    }
+    if (Math.floor(t * 2) % 2 === 0) {
+      ctx.font = `700 12px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(page < HOWTO_PAGES - 1 ? 'タップで次へ' : 'タップでスタート！', CONFIG.W / 2, 604);
     }
   },
 
@@ -1095,6 +1667,8 @@ const Render = {
     const tol = CONFIG.connectorWidth / 2 + CONFIG.judge.catchExtra;
     ctx.strokeStyle = '#ff0';
     ctx.strokeRect(g.bodyX - tol, ly - 4, tol * 2, 8);
+    ctx.font = `10px monospace`; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+    ctx.fillText(`st${g.stageNo} v${g.st ? Math.round(g.st.speed * g.comboSpeedMul) : '-'} int${g.st ? g.st.interval.toFixed(2) : '-'} wrong${g.wrongStreak}`, 4, 630);
   },
 };
 
@@ -1108,7 +1682,7 @@ function frame(ts) {
   const dt = Math.min((ts - lastTs) / 1000, CONFIG.dtMax);
   lastTs = ts;
   Game.update(dt);
-  Render.draw(Screen.ctx, Game);
+  Render.draw(Screen.ctx, Game, dt);
   requestAnimationFrame(frame);
 }
 
